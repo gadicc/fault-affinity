@@ -28,15 +28,21 @@ and `controlled-load-plan.mjs` normalizes the A1/B/A2 and sibling exact
 schedules required by manifest version 5. The existing phase builders remain
 authoritative for canonical topology and schedule validation.
 
+`controlled-load-recipes.mjs` expands named convenience recipes into that same
+validated version-5 plan boundary; recipe names are not persisted as evidence
+authority.
+
 Pinned waves use a separate process boundary. `pinned-wave-client.mjs` starts
 one `pinned-wave-owner.mjs` process under the stored controller CPU. The owner
 acquires the bundle lease, advances at most one wave, and returns a bounded
 structured result over a dedicated descriptor rather than workload stdout or
 stderr. The public coordinator then rereads durable bundle state.
 
-Controlled-load orchestration resolves a second trusted custom workload for
-the condition workers. That workload must use `survive-window` semantics. The
-schema-3 owner retains one bundle lease across the complete A1/B/A2 session;
+Controlled-load orchestration resolves a second built-in or trusted custom
+workload for the condition workers. That workload must use `survive-window`
+semantics. The `wasm-churn-aba` recipe selects `wasm-churn` and `yes-load`
+before entering this unchanged boundary. The schema-3 owner retains one bundle
+lease across the complete A1/B/A2 session;
 exact resume of the same v5 bundle receives the auxiliary identity only for
 manifest validation and does not start the condition workload.
 

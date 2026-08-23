@@ -82,8 +82,9 @@ was fixed at bundle creation. `exact --resume` uses that stored schedule and
 shares the same lease with baseline operations.
 
 Version-5 controlled-load bundles also bind an auxiliary workload identity.
-Their exact resume must include the same `--condition-workload-file`; this
-validates the manifest but does not start condition workers. See the
+Their exact resume must include the same built-in `--condition-workload`,
+custom `--condition-workload-file`, or `--recipe` selection; this validates
+the manifest but does not start condition workers. See the
 [generic controlled-load guide](generic-controlled-load.md).
 
 `SIGINT` and `SIGTERM` cancel the active attempt, retain ownership through

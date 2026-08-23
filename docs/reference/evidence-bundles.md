@@ -187,7 +187,8 @@ node fault-affinity.mjs summarize \
   --json
 ```
 
-Manifest version 5 also requires the matching
-`--condition-workload-file`. The command validates the bundle through its
+Manifest version 5 also requires the matching built-in
+`--condition-workload`, custom `--condition-workload-file`, or recipe. The
+command validates the bundle through its
 authoritative reader, writes nothing inside it, and counts only committed typed
 outcomes. See [summarize a schema-3 bundle](../guides/schema3-summaries.md).

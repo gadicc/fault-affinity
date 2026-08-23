@@ -49,3 +49,7 @@ matrix, and debugger modes remain separate experiments and formats.
 - The plan does not infer topology or claim a causal mechanism.
 - Debugger, privileged frequency, and legacy report integration remain separate
   migration decisions.
+
+[ADR 0033](0033-built-in-controlled-load-recipes.md) later adds the
+`yes-load` built-in and `wasm-churn-aba` recipe as CLI conveniences. They
+expand into this unchanged manifest-v5 contract.

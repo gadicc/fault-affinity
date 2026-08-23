@@ -40,6 +40,7 @@ example, the summary command below reads an existing bundle:
 
 ```sh
 node fault-affinity.mjs workloads
+node fault-affinity.mjs recipes
 node fault-affinity.mjs inspect --workload wasm-churn-suite
 node fault-affinity.mjs summarize \
   --bundle-dir diagnostics/wasm-exact \
@@ -59,6 +60,22 @@ node fault-affinity.mjs exact \
   --out-dir diagnostics/wasm-exact \
   --dry-run
 ```
+
+The shortest path to the documented reduced controlled-load comparison is:
+
+```sh
+node fault-affinity.mjs controlled-load \
+  --recipe wasm-churn-aba \
+  --target-cpu 19 \
+  --load-cpus 0-7 \
+  --out-dir diagnostics/wasm-churn-aba \
+  --dry-run
+```
+
+The recipe explicitly selects `wasm-churn` plus verified `yes-load` workers
+and binds ten attempts per A1/B/A2 leg. CPU topology remains explicit; replace
+the example target and load set after reviewing the host. A live run uses the
+same command with `--yes` instead of `--dry-run`.
 
 A live run needs the same explicit selection plus `--yes`:
 
@@ -90,8 +107,8 @@ CPU and one independently supervised child per active CPU. See
 [run generic pinned-concurrent waves](docs/guides/generic-pinned-concurrent.md).
 
 For a generic before/during/after comparison, a version-5 plan binds one
-measured workload, a trusted custom condition workload, disjoint target and
-worker CPUs, and a sibling exact schedule. See
+measured workload, a built-in or trusted custom condition workload, disjoint
+target and worker CPUs, and a sibling exact schedule. See
 [run a generic controlled-load comparison](docs/guides/generic-controlled-load.md).
 
 ## Reproduce the historical Node/PGlite failure

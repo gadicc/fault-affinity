@@ -17,6 +17,11 @@ node fault-affinity.mjs inspect --workload wasm-churn
 - `wasm-churn-suite` runs the same trigger with a distinct identity declaring
   baseline, group, exact-CPU, and pinned-concurrent capabilities. It is the
   recommended built-in for a version-2 baseline bundle.
+- `yes-load` is the recommended controlled-load condition. Fault Affinity
+  starts one `/usr/bin/yes` process per declared load CPU, discards its output,
+  verifies singleton affinity and process identity, and stops the complete set
+  after B. Its one-hour deadline is an outer safety bound, not the planned
+  session duration.
 - `node-pglite` is the historical heavyweight trigger. It keeps
   `child.mjs`, `package.json`, and `package-lock.json` in provenance and requires
   the installed PGlite dependency at execution time; this ID remains
@@ -29,6 +34,16 @@ therefore add phases without silently changing the identity used by existing
 exact-only bundles.
 
 Neither built-in runs while listing, inspecting, or planning.
+
+List the higher-level built-in recipes separately:
+
+```sh
+node fault-affinity.mjs recipes
+```
+
+`wasm-churn-aba` combines the `wasm-churn` measured identity and `yes-load`
+condition with reviewed A1/B/A2 defaults while leaving target and load CPUs
+explicit.
 
 The catalog entries are defined in `catalog.mjs`. They bind exact executable,
 argument, lifecycle, outcome, capability, and provenance identities; they are

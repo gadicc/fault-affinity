@@ -62,8 +62,19 @@ node fault-affinity.mjs summarize \
 ```
 
 The condition definition is resolved only to validate the stored identity. No
-condition worker starts. `--condition-workload-file` is rejected for manifest
+condition worker starts. Condition selectors are rejected for manifest
 versions 1 through 4 and 6.
+
+For the built-in reduced recipe, one option supplies both identities:
+
+```sh
+node fault-affinity.mjs summarize \
+  --bundle-dir diagnostics/wasm-churn-aba \
+  --recipe wasm-churn-aba
+```
+
+An explicitly selected built-in condition may instead be repeated with
+`--condition-workload yes-load`.
 
 ## Keep the interpretation narrow
 

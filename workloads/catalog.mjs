@@ -106,6 +106,31 @@ function nodePgliteSpec({ id, label, capabilities }) {
   };
 }
 
+function yesLoadSpec() {
+  return {
+    version: 1,
+    id: "yes-load",
+    label: "Pinned yes load worker",
+    description: "Long-lived CPU-load condition using one /usr/bin/yes process per selected worker CPU.",
+    risk: "standard",
+    command: {
+      executable: "/usr/bin/yes",
+      args: [],
+      cwd: "/",
+    },
+    environment: {},
+    attempt: {
+      mode: "survive-window",
+      timeoutMs: 3_600_000,
+      termGraceMs: 500,
+      killGraceMs: 1_000,
+    },
+    outcomes: { targetSignals: [], mappedExits: [] },
+    capabilities: {},
+    provenance: { completeness: "complete", files: [] },
+  };
+}
+
 const BUILT_INS = Object.freeze({
   "wasm-churn": Object.freeze({
     id: "wasm-churn",
@@ -140,6 +165,17 @@ const BUILT_INS = Object.freeze({
           pinnedConcurrent: true,
         },
       });
+    },
+  }),
+  "yes-load": Object.freeze({
+    id: "yes-load",
+    label: "Pinned yes load worker",
+    recommended: true,
+    role: "Recommended controlled-load condition",
+    risk: "standard",
+    liveWarning: "Consumes one logical CPU per selected worker until planned stop; output is discarded and a one-hour safety deadline applies.",
+    buildSpec() {
+      return yesLoadSpec();
     },
   }),
   "node-pglite": Object.freeze({

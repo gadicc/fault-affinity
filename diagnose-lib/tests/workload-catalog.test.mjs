@@ -73,13 +73,14 @@ test("the built-in catalog is descriptive and resolves without executing a workl
   assert.deepEqual(listed.map(({ id }) => id), [
     "wasm-churn",
     "wasm-churn-suite",
+    "yes-load",
     "node-pglite",
     "node-pglite-suite",
     "wasm-churn-debugger",
     "node-pglite-debugger",
   ]);
   assert.equal(listed[0].recommended, true);
-  assert.equal(listed[2].risk, "high-memory");
+  assert.equal(listed.find(({ id }) => id === "node-pglite").risk, "high-memory");
 
   const selected = resolveBuiltInWorkload("wasm-churn");
   assert.equal(selected.source, "built-in");
@@ -95,6 +96,13 @@ test("the built-in catalog is descriptive and resolves without executing a workl
   assert.equal(suite.resolved.capabilities.isolated, true);
   assert.equal(suite.resolved.capabilities.pinnedConcurrent, true);
   assert.notEqual(suite.resolved.digest, selected.resolved.digest);
+
+  const condition = resolveBuiltInWorkload("yes-load");
+  assert.equal(condition.resolved.command.executable.path, "/usr/bin/yes");
+  assert.equal(condition.resolved.attempt.mode, "survive-window");
+  assert.equal(condition.resolved.attempt.timeoutMs, 3_600_000);
+  assert.equal(condition.resolved.capabilities.isolated, false);
+  assert.deepEqual(condition.resolved.outcomes.targetSignals, []);
 
   const wasmDebugger = resolveBuiltInWorkload("wasm-churn-debugger");
   assert.equal(wasmDebugger.resolved.capabilities.gdb, true);

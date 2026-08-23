@@ -38,3 +38,4 @@ behavior and compatibility boundaries, not current runtime capabilities.
 | [ADR 0030](0030-complete-only-debugger-attempt-envelopes.md) | Accepted | Publish complete-only debugger attempt envelopes with envelope-last durable artifact triples. |
 | [ADR 0031](0031-schema3-manifest-v6-debugger.md) | Accepted | Bind the debugger-focused exact-CPU variant in schema-3 manifest v6 under one lease. |
 | [ADR 0032](0032-public-debugger-command.md) | Accepted | Publish the debugger command for v6 bundles and the two debugger-capable built-in profiles. |
+| [ADR 0033](0033-built-in-controlled-load-recipes.md) | Accepted | Make the reduced A1/B/A2 path repeatable through the `yes-load` built-in and `wasm-churn-aba` recipe without changing manifest v5. |

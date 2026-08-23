@@ -51,6 +51,20 @@ exact-only and `wasm-churn-suite` multi-phase built-ins. The legacy diagnostic
 suite still does not select this trigger. Preserve planned termination as
 cleanup evidence, not a workload signal.
 
+Repeat the reduced controlled-load comparison through the public recipe:
+
+```sh
+node fault-affinity.mjs controlled-load \
+  --recipe wasm-churn-aba \
+  --target-cpu 19 \
+  --load-cpus 0-7 \
+  --out-dir diagnostics/wasm-churn-aba \
+  --dry-run
+```
+
+The recipe uses the published ten-second `wasm-churn` identity rather than
+silently changing it to the eight-second windows in the historical table.
+
 ## Interpret the rate ladder
 
 The observed rate changes track module lifecycle work:

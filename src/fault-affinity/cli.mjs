@@ -15,7 +15,10 @@ import {
   MAX_BASELINE_CHILDREN,
   MAX_BASELINE_WAVES,
 } from "../../diagnose-lib/baseline-phase.mjs";
-import { buildControlledLoadSessionManifest } from "../../diagnose-lib/controlled-load-session.mjs";
+import {
+  buildControlledLoadSessionManifest,
+  MAX_CONTROLLED_LOAD_ATTEMPTS_PER_LEG,
+} from "../../diagnose-lib/controlled-load-session.mjs";
 import {
   DEBUGGER_MAX_RUNS,
   buildDebuggerPhaseManifest,
@@ -52,6 +55,12 @@ import {
   resolveWorkloadSelection,
 } from "../../workloads/catalog.mjs";
 import { readControlledLoadPlanFile } from "./controlled-load-plan.mjs";
+import {
+  buildControlledLoadRecipePlan,
+  DEFAULT_CONTROLLED_LOAD_CONDITION,
+  listControlledLoadRecipes,
+  resolveControlledLoadRecipe,
+} from "./controlled-load-recipes.mjs";
 import { readGroupPlanFile } from "./group-plan.mjs";
 import { readPinnedPlanFile } from "./pinned-plan.mjs";
 import { runPinnedWaveProcess } from "./pinned-wave-client.mjs";
@@ -69,9 +78,11 @@ const HELP = `Fault Affinity: bounded, resumable workload diagnostics
 
 Usage:
   fault-affinity workloads [--json]
+  fault-affinity recipes [--json]
   fault-affinity inspect (--workload ID | --workload-file FILE) [--json]
   fault-affinity summarize --bundle-dir DIR \\
-    (--workload ID | --workload-file FILE) [--condition-workload-file FILE] [--json]
+    ((--workload ID | --workload-file FILE) \\
+      [--condition-workload ID | --condition-workload-file FILE] | --recipe ID) [--json]
   fault-affinity baseline (--workload ID | --workload-file FILE) \\
     --children N --waves N --exact-cpus LIST [--exact-rounds N] \\
     [--exact-seed N] --out-dir DIR (--dry-run | --yes)
@@ -82,11 +93,15 @@ Usage:
   fault-affinity pinned (--workload ID | --workload-file FILE) \\
     --plan-file FILE --out-dir DIR (--dry-run | --yes)
   fault-affinity pinned --resume DIR (--workload ID | --workload-file FILE) --yes
+  fault-affinity controlled-load --recipe wasm-churn-aba \\
+    --target-cpu N --load-cpus LIST --out-dir DIR (--dry-run | --yes)
   fault-affinity controlled-load (--workload ID | --workload-file FILE) \\
-    --condition-workload-file FILE --plan-file FILE --out-dir DIR \\
+    [--condition-workload ID | --condition-workload-file FILE] \\
+    --plan-file FILE --out-dir DIR \\
     (--dry-run | --yes)
   fault-affinity controlled-load --resume DIR \\
-    (--workload ID | --workload-file FILE) --condition-workload-file FILE --yes
+    ((--workload ID | --workload-file FILE) \\
+      [--condition-workload ID | --condition-workload-file FILE] | --recipe ID) --yes
   fault-affinity debugger (--workload ID | --workload-file FILE) \\
     --cpu N --max-runs N --max-captures N --debugger PATH --out-dir DIR \\
     (--dry-run | --yes)
@@ -94,7 +109,8 @@ Usage:
   fault-affinity exact (--workload ID | --workload-file FILE) \\
     --cpus LIST [--rounds N] [--seed N] --out-dir DIR (--dry-run | --yes)
   fault-affinity exact --resume DIR (--workload ID | --workload-file FILE) \\
-    [--condition-workload-file FILE] --yes
+    [--condition-workload ID | --condition-workload-file FILE] --yes
+  fault-affinity exact --resume DIR --recipe ID --yes
 
 The baseline command creates schema-3 v2 bundles. The groups command creates
 v3 bundles from a bounded plan file. The pinned command creates v4 bundles that
@@ -106,6 +122,10 @@ can advance their matching state in later compatible bundle versions. The
 exact command also creates exact-only v1 bundles. Listing, inspection,
 summaries, and dry runs never execute a workload or create an evidence bundle.
 Every live run requires explicit workload selection and --yes.
+
+The wasm-churn-aba recipe explicitly selects the recommended wasm-churn
+measured workload and yes-load condition. Target and load CPUs remain required
+because Fault Affinity does not infer machine topology.
 
 Debugger transcripts retain verbatim workload and debugger output, which can
 contain values the workload itself prints.
@@ -166,6 +186,27 @@ function selectionFrom(options) {
   };
 }
 
+function selectionOrRecipeFrom(options) {
+  const selectionCount = Number(options.workload !== undefined) +
+    Number(options.workloadFile !== undefined) + Number(options.recipe !== undefined);
+  if (selectionCount !== 1) {
+    fail("select exactly one --workload ID, --workload-file FILE, or --recipe ID");
+  }
+  if (options.recipe !== undefined) return { recipe: options.recipe };
+  return selectionFrom(options);
+}
+
+function conditionFrom(options, { defaultWorkload } = {}) {
+  if (options.conditionWorkload !== undefined && options.conditionWorkloadFile !== undefined) {
+    fail("select at most one --condition-workload ID or --condition-workload-file FILE");
+  }
+  if (options.conditionWorkloadFile !== undefined) {
+    return { conditionWorkloadFile: options.conditionWorkloadFile };
+  }
+  const workload = options.conditionWorkload ?? defaultWorkload;
+  return workload === undefined ? {} : { conditionWorkload: workload };
+}
+
 function parseCanonicalInteger(value, label, minimum, maximum) {
   if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
     fail(`${label} must be a canonical decimal integer`);
@@ -199,7 +240,7 @@ export function parseFaultAffinityArgs(argv) {
     return Object.freeze({ command: "help" });
   }
   const [command, ...rest] = argv;
-  if (command === "workloads") {
+  if (command === "workloads" || command === "recipes") {
     const options = parseOptions(rest, new Map(), new Map([
       ["--json", "json"], ["--help", "help"], ["-h", "help"],
     ]));
@@ -220,20 +261,24 @@ export function parseFaultAffinityArgs(argv) {
       ["--bundle-dir", "bundleDir"],
       ["--workload", "workload"],
       ["--workload-file", "workloadFile"],
+      ["--recipe", "recipe"],
+      ["--condition-workload", "conditionWorkload"],
       ["--condition-workload-file", "conditionWorkloadFile"],
     ]), new Map([
       ["--json", "json"], ["--help", "help"], ["-h", "help"],
     ]));
     if (options.help) return Object.freeze({ command, help: true });
     if (options.bundleDir === undefined) fail("summarize requires --bundle-dir DIR");
-    const selection = selectionFrom(options);
+    const selection = selectionOrRecipeFrom(options);
+    if (options.recipe !== undefined &&
+        (options.conditionWorkload !== undefined || options.conditionWorkloadFile !== undefined)) {
+      fail("--recipe cannot be combined with an explicit condition workload");
+    }
     return Object.freeze({
       command,
       ...selection,
       bundleDir: options.bundleDir,
-      ...(options.conditionWorkloadFile === undefined ? {} : {
-        conditionWorkloadFile: options.conditionWorkloadFile,
-      }),
+      ...conditionFrom(options),
       ...(options.json === undefined ? {} : { json: true }),
     });
   }
@@ -305,6 +350,8 @@ export function parseFaultAffinityArgs(argv) {
     const options = parseOptions(rest, new Map([
       ["--workload", "workload"],
       ["--workload-file", "workloadFile"],
+      ["--recipe", "recipe"],
+      ["--condition-workload", "conditionWorkload"],
       ["--condition-workload-file", "conditionWorkloadFile"],
       ["--cpus", "cpuSpec"],
       ["--rounds", "roundsText"],
@@ -317,20 +364,24 @@ export function parseFaultAffinityArgs(argv) {
       ["--help", "help"], ["-h", "help"],
     ]));
     if (options.help) return Object.freeze({ command, help: true });
-    const selection = selectionFrom(options);
+    const selection = selectionOrRecipeFrom(options);
+    if (options.recipe !== undefined &&
+        (options.conditionWorkload !== undefined || options.conditionWorkloadFile !== undefined)) {
+      fail("--recipe cannot be combined with an explicit condition workload");
+    }
     if (options.resumeDir !== undefined) {
       const fresh = ["cpuSpec", "roundsText", "seedText", "outDir", "tasksetPath"]
         .filter((key) => options[key] !== undefined);
       if (fresh.length > 0) fail("--resume cannot be combined with fresh schedule options");
       if (!options.yes || options.dryRun) fail("an exact resume requires --yes");
       return Object.freeze({ command, mode: "resume", ...selection,
-        resumeDir: options.resumeDir,
-        ...(options.conditionWorkloadFile === undefined ? {} : {
-          conditionWorkloadFile: options.conditionWorkloadFile,
-        }) });
+        resumeDir: options.resumeDir, ...conditionFrom(options) });
     }
-    if (options.conditionWorkloadFile !== undefined) {
-      fail("--condition-workload-file is supported only when resuming a controlled-load bundle");
+    if (options.recipe !== undefined) {
+      fail("--recipe is supported by exact only when resuming a controlled-load bundle");
+    }
+    if (options.conditionWorkload !== undefined || options.conditionWorkloadFile !== undefined) {
+      fail("a condition workload is supported only when resuming a controlled-load bundle");
     }
     if (options.cpuSpec === undefined || options.outDir === undefined) {
       fail("a fresh exact run requires --cpus LIST and --out-dir DIR");
@@ -413,8 +464,18 @@ export function parseFaultAffinityArgs(argv) {
     const options = parseOptions(rest, new Map([
       ["--workload", "workload"],
       ["--workload-file", "workloadFile"],
+      ["--recipe", "recipe"],
+      ["--condition-workload", "conditionWorkload"],
       ["--condition-workload-file", "conditionWorkloadFile"],
       ["--plan-file", "planFile"],
+      ["--target-cpu", "targetCpuText"],
+      ["--load-cpus", "loadCpuSpec"],
+      ["--attempts-per-leg", "attemptsPerLegText"],
+      ["--warmup-ms", "warmupMsText"],
+      ["--recovery-ms", "recoveryMsText"],
+      ["--exact-cpus", "exactCpuSpec"],
+      ["--exact-rounds", "exactRoundsText"],
+      ["--seed", "seedText"],
       ["--out-dir", "outDir"],
       ["--resume", "resumeDir"],
       ["--taskset", "tasksetPath"],
@@ -423,12 +484,24 @@ export function parseFaultAffinityArgs(argv) {
       ["--help", "help"], ["-h", "help"],
     ]));
     if (options.help) return Object.freeze({ command, help: true });
-    const selection = selectionFrom(options);
-    if (options.conditionWorkloadFile === undefined) {
-      fail("controlled-load requires --condition-workload-file FILE");
+    const selection = selectionOrRecipeFrom(options);
+    const recipeMode = options.recipe !== undefined;
+    if (recipeMode && (options.conditionWorkload !== undefined ||
+        options.conditionWorkloadFile !== undefined || options.planFile !== undefined)) {
+      fail("--recipe cannot be combined with a plan file or explicit condition workload");
+    }
+    if (!recipeMode && [
+      "targetCpuText", "loadCpuSpec", "attemptsPerLegText", "warmupMsText",
+      "recoveryMsText", "exactCpuSpec", "exactRoundsText", "seedText",
+    ].some((key) => options[key] !== undefined)) {
+      fail("inline controlled-load schedule options require --recipe ID");
     }
     if (options.resumeDir !== undefined) {
-      const fresh = ["planFile", "outDir", "tasksetPath"]
+      const fresh = [
+        "planFile", "targetCpuText", "loadCpuSpec", "attemptsPerLegText",
+        "warmupMsText", "recoveryMsText", "exactCpuSpec", "exactRoundsText",
+        "seedText", "outDir", "tasksetPath",
+      ]
         .filter((key) => options[key] !== undefined);
       if (fresh.length > 0) {
         fail("--resume cannot be combined with fresh controlled-load options");
@@ -438,21 +511,63 @@ export function parseFaultAffinityArgs(argv) {
         command,
         mode: "resume",
         ...selection,
-        conditionWorkloadFile: options.conditionWorkloadFile,
+        ...(recipeMode ? {} : conditionFrom(options, {
+          defaultWorkload: DEFAULT_CONTROLLED_LOAD_CONDITION,
+        })),
         resumeDir: options.resumeDir,
       });
     }
-    if (options.planFile === undefined || options.outDir === undefined) {
-      fail("a fresh controlled-load run requires --plan-file FILE and --out-dir DIR");
+    if (options.outDir === undefined || (!recipeMode && options.planFile === undefined)) {
+      fail(recipeMode
+        ? "a fresh controlled-load recipe run requires --out-dir DIR"
+        : "a fresh controlled-load run requires --plan-file FILE and --out-dir DIR");
+    }
+    if (recipeMode && (options.targetCpuText === undefined || options.loadCpuSpec === undefined)) {
+      fail("a fresh controlled-load recipe run requires --target-cpu N and --load-cpus LIST");
     }
     if (Boolean(options.dryRun) === Boolean(options.yes)) {
       fail("choose exactly one --dry-run or --yes for a fresh controlled-load run");
+    }
+    if (recipeMode) {
+      return Object.freeze({
+        command,
+        mode: options.dryRun ? "dry-run" : "fresh",
+        ...selection,
+        targetCpu: parseCanonicalInteger(options.targetCpuText, "--target-cpu", 0, MAX_CPU_ID),
+        loadCpus: parseCanonicalCpuList(options.loadCpuSpec, "--load-cpus"),
+        loadCpuSpec: options.loadCpuSpec,
+        ...(options.attemptsPerLegText === undefined ? {} : {
+          attemptsPerLeg: parseCanonicalInteger(options.attemptsPerLegText,
+            "--attempts-per-leg", 1, MAX_CONTROLLED_LOAD_ATTEMPTS_PER_LEG),
+        }),
+        ...(options.warmupMsText === undefined ? {} : {
+          warmupMs: parseCanonicalInteger(options.warmupMsText,
+            "--warmup-ms", 0, 3_600_000),
+        }),
+        ...(options.recoveryMsText === undefined ? {} : {
+          recoveryMs: parseCanonicalInteger(options.recoveryMsText,
+            "--recovery-ms", 0, 3_600_000),
+        }),
+        ...(options.exactCpuSpec === undefined ? {} : {
+          exactCpus: parseCanonicalCpuList(options.exactCpuSpec, "--exact-cpus"),
+          exactCpuSpec: options.exactCpuSpec,
+        }),
+        ...(options.exactRoundsText === undefined ? {} : {
+          exactRounds: parseCanonicalInteger(options.exactRoundsText,
+            "--exact-rounds", 1, MAX_SCHEDULE_ENTRIES),
+        }),
+        ...(options.seedText === undefined ? {} : {
+          seed: parseCanonicalInteger(options.seedText, "--seed", 0, MAX_SEED),
+        }),
+        outDir: options.outDir,
+        tasksetPath: options.tasksetPath ?? DEFAULT_TASKSET_PATH,
+      });
     }
     return Object.freeze({
       command,
       mode: options.dryRun ? "dry-run" : "fresh",
       ...selection,
-      conditionWorkloadFile: options.conditionWorkloadFile,
+      ...conditionFrom(options, { defaultWorkload: DEFAULT_CONTROLLED_LOAD_CONDITION }),
       planFile: options.planFile,
       outDir: options.outDir,
       tasksetPath: options.tasksetPath ?? DEFAULT_TASKSET_PATH,
@@ -628,8 +743,13 @@ function renderWorkload(selection) {
 }
 
 function resolveSelection(parsed, cwd) {
+  const recipe = parsed.recipe === undefined
+    ? undefined
+    : resolveControlledLoadRecipe(parsed.recipe);
   return resolveWorkloadSelection({
-    ...(parsed.workload === undefined ? {} : { workload: parsed.workload }),
+    ...((parsed.workload ?? recipe?.measuredWorkload) === undefined
+      ? {}
+      : { workload: parsed.workload ?? recipe.measuredWorkload }),
     ...(parsed.workloadFile === undefined ? {} : {
       workloadFile: path.resolve(cwd, parsed.workloadFile),
     }),
@@ -637,8 +757,16 @@ function resolveSelection(parsed, cwd) {
 }
 
 function resolveConditionSelection(parsed, cwd) {
+  const recipe = parsed.recipe === undefined
+    ? undefined
+    : resolveControlledLoadRecipe(parsed.recipe);
+  const workload = parsed.conditionWorkload ?? recipe?.conditionWorkload;
+  if (workload === undefined && parsed.conditionWorkloadFile === undefined) return undefined;
   return resolveWorkloadSelection({
-    workloadFile: path.resolve(cwd, parsed.conditionWorkloadFile),
+    ...(workload === undefined ? {} : { workload }),
+    ...(parsed.conditionWorkloadFile === undefined ? {} : {
+      workloadFile: path.resolve(cwd, parsed.conditionWorkloadFile),
+    }),
   });
 }
 
@@ -904,6 +1032,9 @@ async function runExactBundle({
   const forwarding = installSignalForwarding(signalSource);
   try {
     let bundle = await readSchema3Bundle({ resolved, auxiliary, bundleDir });
+    if (auxiliary !== undefined && bundle.manifest.version !== 5) {
+      fail("a condition workload applies only to schema-3 manifest-v5 bundles");
+    }
     while (!bundle.exactCpu.progress.complete) {
       if (forwarding.signal.aborted) return signalExitCode(forwarding.received());
       const { nextSlot, committedAttempts, totalAttempts } = bundle.exactCpu.progress;
@@ -1223,6 +1354,18 @@ export async function runFaultAffinityCli(argv, io = {}) {
       }
       return 0;
     }
+    if (parsed.command === "recipes") {
+      const recipes = listControlledLoadRecipes();
+      if (parsed.json) writeOut(`${JSON.stringify(recipes, null, 2)}\n`);
+      else {
+        for (const recipe of recipes) {
+          writeOut(`${recipe.id}\n  ${recipe.description}\n` +
+            `  measured: ${recipe.measuredWorkload}; condition: ${recipe.conditionWorkload}\n` +
+            "  requires: --target-cpu N --load-cpus LIST\n");
+        }
+      }
+      return 0;
+    }
     const selection = resolveSelection(parsed, cwd);
     if (parsed.command === "inspect") {
       if (parsed.json) writeOut(`${JSON.stringify(workloadSummary(selection), null, 2)}\n`);
@@ -1230,9 +1373,7 @@ export async function runFaultAffinityCli(argv, io = {}) {
       return 0;
     }
     if (parsed.command === "summarize") {
-      const conditionSelection = parsed.conditionWorkloadFile === undefined
-        ? undefined
-        : resolveConditionSelection(parsed, cwd);
+      const conditionSelection = resolveConditionSelection(parsed, cwd);
       const bundleDir = resolveExistingBundleDirectory(path.resolve(cwd, parsed.bundleDir));
       const bundle = await readSchema3Bundle({
         resolved: selection.resolved,
@@ -1240,7 +1381,7 @@ export async function runFaultAffinityCli(argv, io = {}) {
         bundleDir,
       });
       if (bundle.manifest.version !== 5 && conditionSelection !== undefined) {
-        fail("--condition-workload-file applies only to schema-3 manifest-v5 bundles");
+        fail("a condition workload applies only to schema-3 manifest-v5 bundles");
       }
       const summary = buildSchema3BundleSummary(bundle);
       writeOut(parsed.json
@@ -1325,8 +1466,21 @@ export async function runFaultAffinityCli(argv, io = {}) {
           writeErr,
         });
       }
-      const planPath = path.resolve(cwd, parsed.planFile);
-      const plan = readControlledLoadPlanFile(planPath);
+      const recipePlan = parsed.recipe === undefined ? undefined : buildControlledLoadRecipePlan(
+        parsed.recipe,
+        {
+          targetCpu: parsed.targetCpu,
+          loadCpus: parsed.loadCpus,
+          attemptsPerLeg: parsed.attemptsPerLeg,
+          warmupMs: parsed.warmupMs,
+          recoveryMs: parsed.recoveryMs,
+          exactCpus: parsed.exactCpus,
+          exactRounds: parsed.exactRounds,
+          seed: parsed.seed,
+        },
+      );
+      const planPath = parsed.planFile === undefined ? undefined : path.resolve(cwd, parsed.planFile);
+      const plan = recipePlan?.plan ?? readControlledLoadPlanFile(planPath);
       const tasksetPath = resolveExecutablePath(parsed.tasksetPath, "--taskset");
       const scheduledCpus = [...new Set([
         plan.controlledLoad.targetCpu,
@@ -1349,7 +1503,9 @@ export async function runFaultAffinityCli(argv, io = {}) {
         writeOut(`${renderWorkload(selection)}\n`);
         writeOut("condition workload:\n");
         writeOut(`${renderWorkload(conditionSelection)}\n`);
-        writeOut(`plan file: ${planPath}\n`);
+        writeOut(recipePlan === undefined
+          ? `plan file: ${planPath}\n`
+          : `recipe: ${recipePlan.recipe.id} (${recipePlan.recipe.label})\n`);
         writeOut(`controlled load: target CPU ${controlledExecution.targetCpu}; workers ` +
           `${compressCpuList(controlledExecution.workerCpus)}; ` +
           `${controlledSchedule.attemptsPerLeg} attempt(s) per A1/B/A2 leg; ` +
@@ -1606,9 +1762,7 @@ export async function runFaultAffinityCli(argv, io = {}) {
       });
     }
     assertExactCapability(selection);
-    const conditionSelection = parsed.conditionWorkloadFile === undefined
-      ? undefined
-      : resolveConditionSelection(parsed, cwd);
+    const conditionSelection = resolveConditionSelection(parsed, cwd);
     if (conditionSelection !== undefined) assertControlledLoadCondition(conditionSelection);
     if (parsed.mode !== "dry-run") assertAutomationBoundary(selection);
     if (parsed.mode !== "dry-run" && conditionSelection !== undefined) {

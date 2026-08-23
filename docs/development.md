@@ -64,7 +64,10 @@ waiting condition process. Together they validate:
 - GDB process and accounting reconciliation
 - Publication of a validated fake capture envelope
 
-The tests must not start `/usr/bin/yes` workers or execute the real PGlite child.
+Catalog and recipe tests may resolve and hash `/usr/bin/yes` and the
+`mini-wasm-churn.mjs` script. Public recipe tests stop at `--dry-run`; the
+automated boundary must not start `/usr/bin/yes` workers, execute a live
+WebAssembly trigger, or execute the real PGlite child.
 
 ## Keep privileged behavior separate
 

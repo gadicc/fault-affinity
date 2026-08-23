@@ -197,6 +197,9 @@ function capture(cwd) {
 
 test("argument parsing keeps live selection and confirmation explicit", () => {
   assert.deepEqual(parseFaultAffinityArgs(["workloads"]), { command: "workloads" });
+  assert.deepEqual(parseFaultAffinityArgs(["recipes", "--json"]), {
+    command: "recipes", json: true,
+  });
   assert.deepEqual(parseFaultAffinityArgs([
     "summarize", "--bundle-dir", "bundle", "--workload-file", "measured.json",
     "--condition-workload-file", "condition.json", "--json",
@@ -299,10 +302,56 @@ test("argument parsing keeps live selection and confirmation explicit", () => {
     "controlled-load", "--resume", "bundle", "--workload-file", "measured.json",
     "--condition-workload-file", "condition.json", "--dry-run",
   ]), /controlled-load resume requires --yes/);
-  assert.throws(() => parseFaultAffinityArgs([
+  assert.deepEqual(parseFaultAffinityArgs([
     "controlled-load", "--workload-file", "measured.json", "--plan-file", "plan.json",
     "--out-dir", "bundle", "--dry-run",
-  ]), /requires --condition-workload-file/);
+  ]), {
+    command: "controlled-load",
+    mode: "dry-run",
+    workloadFile: "measured.json",
+    conditionWorkload: "yes-load",
+    planFile: "plan.json",
+    outDir: "bundle",
+    tasksetPath: "/usr/bin/taskset",
+  });
+  assert.deepEqual(parseFaultAffinityArgs([
+    "controlled-load", "--recipe", "wasm-churn-aba", "--target-cpu", "19",
+    "--load-cpus", "0-7", "--out-dir", "bundle", "--dry-run",
+  ]), {
+    command: "controlled-load",
+    mode: "dry-run",
+    recipe: "wasm-churn-aba",
+    targetCpu: 19,
+    loadCpus: [0, 1, 2, 3, 4, 5, 6, 7],
+    loadCpuSpec: "0-7",
+    outDir: "bundle",
+    tasksetPath: "/usr/bin/taskset",
+  });
+  assert.deepEqual(parseFaultAffinityArgs([
+    "controlled-load", "--resume", "bundle", "--recipe", "wasm-churn-aba", "--yes",
+  ]), {
+    command: "controlled-load",
+    mode: "resume",
+    recipe: "wasm-churn-aba",
+    resumeDir: "bundle",
+  });
+  assert.deepEqual(parseFaultAffinityArgs([
+    "exact", "--resume", "bundle", "--recipe", "wasm-churn-aba", "--yes",
+  ]), {
+    command: "exact",
+    mode: "resume",
+    recipe: "wasm-churn-aba",
+    resumeDir: "bundle",
+  });
+  assert.throws(() => parseFaultAffinityArgs([
+    "controlled-load", "--recipe", "wasm-churn-aba", "--target-cpu", "19",
+    "--load-cpus", "0-7", "--condition-workload", "yes-load",
+    "--out-dir", "bundle", "--dry-run",
+  ]), /cannot be combined/);
+  assert.throws(() => parseFaultAffinityArgs([
+    "controlled-load", "--recipe", "wasm-churn-aba",
+    "--out-dir", "bundle", "--dry-run",
+  ]), /requires --target-cpu N and --load-cpus LIST/);
 });
 
 test("listing and inspection describe built-ins without creating files", async () => {
@@ -310,8 +359,15 @@ test("listing and inspection describe built-ins without creating files", async (
   const listed = capture(directory);
   assert.equal(await runFaultAffinityCli(["workloads"], listed.io), 0);
   assert.match(listed.stdout(), /wasm-churn \(recommended\)/);
+  assert.match(listed.stdout(), /yes-load \(recommended\)/);
   assert.match(listed.stdout(), /node-pglite/);
   assert.equal(listed.stderr(), "");
+
+  const recipes = capture(directory);
+  assert.equal(await runFaultAffinityCli(["recipes"], recipes.io), 0);
+  assert.match(recipes.stdout(), /wasm-churn-aba/);
+  assert.match(recipes.stdout(), /measured: wasm-churn; condition: yes-load/);
+  assert.equal(recipes.stderr(), "");
 
   const inspected = capture(directory);
   assert.equal(await runFaultAffinityCli([
@@ -409,6 +465,49 @@ test("a dry run validates the v5 A/B/A and bound exact schedules", async () => {
   assert.match(captured.stdout(), /no workload executed and no bundle created/);
 });
 
+test("the WebAssembly A/B/A recipe expands safe defaults without executing or creating output", async () => {
+  const directory = temporaryDirectory();
+  const [targetCpu, loadCpu] = allowedCpus(2);
+  const output = path.join(directory, "planned-recipe-bundle");
+  const captured = capture(directory);
+  const rc = await runFaultAffinityCli([
+    "controlled-load", "--recipe", "wasm-churn-aba",
+    "--target-cpu", String(targetCpu), "--load-cpus", String(loadCpu),
+    "--out-dir", path.basename(output), "--dry-run",
+  ], captured.io);
+
+  assert.equal(rc, 0, captured.stderr());
+  assert.equal(existsSync(output), false);
+  assert.match(captured.stdout(), /measured workload:\nwasm-churn:/);
+  assert.match(captured.stdout(), /condition workload:\nyes-load:/);
+  assert.match(captured.stdout(),
+    /recipe: wasm-churn-aba \(WebAssembly churn under controlled load\)/);
+  assert.match(captured.stdout(),
+    /10 attempt\(s\) per A1\/B\/A2 leg; 30 attempt\(s\) total/);
+  assert.match(captured.stdout(), /timing: warmup 0 ms; recovery 15000 ms/);
+  assert.match(captured.stdout(), /bound exact: CPUs .*10 attempt\(s\); seed 17/);
+  assert.match(captured.stdout(), /no workload executed and no bundle created/);
+});
+
+test("generic controlled-load planning defaults its condition to the yes-load built-in", async () => {
+  const directory = temporaryDirectory();
+  const measured = customWorkload(directory);
+  const plan = controlledLoadPlan(directory);
+  const output = path.join(directory, "planned-default-condition-bundle");
+  const captured = capture(directory);
+  const rc = await runFaultAffinityCli([
+    "controlled-load", "--workload-file", path.basename(measured),
+    "--plan-file", path.basename(plan), "--out-dir", path.basename(output),
+    "--dry-run",
+  ], captured.io);
+
+  assert.equal(rc, 0, captured.stderr());
+  assert.equal(existsSync(output), false);
+  assert.match(captured.stdout(), /condition workload:\nyes-load:/);
+  assert.match(captured.stdout(), /plan file:/);
+  assert.match(captured.stdout(), /no workload executed and no bundle created/);
+});
+
 test("a dry run validates a custom exact plan without creating its output directory", async () => {
   const directory = temporaryDirectory();
   const definition = customWorkload(directory);
@@ -472,6 +571,13 @@ test("the public exact command creates, completes, and resumes its own schema-3 
     "--condition-workload-file", path.basename(condition),
   ], extraCondition.io), 2);
   assert.match(extraCondition.stderr(), /applies only to schema-3 manifest-v5 bundles/);
+
+  const extraExactCondition = capture(directory);
+  assert.equal(await runFaultAffinityCli([
+    "exact", "--resume", path.basename(bundleDir), ...selection,
+    "--condition-workload-file", path.basename(condition), "--yes",
+  ], extraExactCondition.io), 2);
+  assert.match(extraExactCondition.stderr(), /applies only to schema-3 manifest-v5 bundles/);
 });
 
 test("the public baseline command completes schema-3 v2 and exact resumes that bundle", {

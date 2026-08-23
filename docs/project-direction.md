@@ -121,20 +121,24 @@ controlled-load session and derives completion from durable publication. Its
 stable supervisors retain the lease through bounded cleanup if the outer owner
 is interrupted.
 
-The `fault-affinity` command now exposes reviewed workload listing, inspection,
-dry-run planning, fresh exact-only schema-3 bundle creation, exact-prefix
-resume, complete correlated baseline waves in manifest-v2 bundles, complete
-CPU-group waves in manifest-v3 bundles, controller-aware waves in manifest-v4
-bundles, and complete A1/B/A2 sessions in manifest-v5 bundles. A baseline
-command pre-binds the downstream exact schedule. The groups, pinned, and
-controlled-load commands safely read explicit plans that bind every sibling
-schedule before bundle creation. The pinned command starts one short-lived
-bundle owner under each scheduled controller CPU. The controlled-load command
-binds separate measured and trusted custom condition workloads and publishes no
-partial session. Phase commands can then advance their matching prefixes in
-that same bundle. A read-only `summarize` command validates versions 1 through 6
-and renders committed outcomes by phase, context, leg, and CPU without changing
-the bundle. Trusted custom JSON workloads declare their own capabilities.
+The `fault-affinity` command now exposes reviewed workload and recipe listing,
+inspection, dry-run planning, fresh exact-only schema-3 bundle creation,
+exact-prefix resume, complete correlated baseline waves in manifest-v2
+bundles, complete CPU-group waves in manifest-v3 bundles, controller-aware
+waves in manifest-v4 bundles, and complete A1/B/A2 sessions in manifest-v5
+bundles. A baseline command pre-binds the downstream exact schedule. The
+groups, pinned, and controlled-load commands safely read explicit plans that
+bind every sibling schedule before bundle creation. The `wasm-churn-aba`
+convenience recipe expands to the unchanged version-5 contract with
+`wasm-churn`, the built-in `yes-load` condition, explicit target and load CPUs,
+and bounded defaults. The pinned command starts one short-lived bundle owner
+under each scheduled controller CPU. The controlled-load command binds
+separate measured and built-in or trusted custom condition workloads and
+publishes no partial session. Phase commands can then advance their matching
+prefixes in that same bundle. A read-only `summarize` command validates
+versions 1 through 6 and renders committed outcomes by phase, context, leg,
+and CPU without changing the bundle. Trusted custom JSON workloads declare
+their own capabilities.
 
 The published `wasm-churn` and `node-pglite` IDs retain their exact-only
 workload identities. Separate `wasm-churn-suite` and `node-pglite-suite`
@@ -156,9 +160,26 @@ applicable. Historical Node
 A/B/A and Node-by-warmup modes remain multi-workload experiments outside the
 current schema.
 
-The next high-value migration is to expose additional generic phases only where
-their capability, provenance, and compatibility contracts are complete. The
+## Build the generic diagnose campaign next
+
+The next major milestone is a generic diagnose-style campaign that binds one
+measured recipe and optional load condition, runs reviewed baseline, group,
+pinned-concurrent, exact-CPU, and focused controlled-load phases, and derives
+one final report with per-phase and per-CPU rates. Denominators and correlated
+wave or session units must remain separate; a report must not pool them merely
+because they share a workload.
+
+Manifest version 4 currently owns baseline, groups, pinned-concurrent, and
+exact state, while version 5 owns controlled-load and exact state. A campaign
+therefore needs either a new combined manifest version or an outer manifest
+that binds multiple complete component bundles. It must also define telemetry,
+statistics, interruption/resume, privacy review, and final-report completion
+semantics before becoming a public command. It should reuse built-in recipes
+instead of reintroducing PGlite-specific launch assumptions.
+
+Until that decision lands, expose additional generic phases only where their
+capability, provenance, and compatibility contracts are complete. The
 schema-3 summary deliberately stops short of the legacy suite's telemetry,
-debugger, statistics, privacy, and final-report behavior. Legacy
+campaign statistics, privacy, and final-report behavior. Legacy
 schema-1/schema-2 interpretation and the privileged recovery namespace remain
 unchanged throughout.
