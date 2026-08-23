@@ -315,7 +315,10 @@ test("TERM-resistant trees escalate to KILL and leave no recorded process", { ti
   const files = launcher();
   const result = track(await runWorkloadAttempt(workload(files, ["tree"], {
     mode: "survive-window",
-    timeoutMs: 100,
+    // The fixture starts a second Node process before it can advertise that
+    // both TERM handlers are installed. Leave setup headroom on throttled or
+    // heavily loaded CI hosts so this test reaches the lifecycle it asserts.
+    timeoutMs: 1_000,
     termGraceMs: 50,
   })));
   const ready = jsonLines(result.output.stdout).find((entry) => entry.type === "tree-ready");
