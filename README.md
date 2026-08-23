@@ -1,5 +1,7 @@
 # Fault Affinity
 
+Copyright (c) 2026 by Gadi Cohen. [MIT Licensed](LICENSE.TXT).
+
 Fault Affinity is a Linux harness for bounded, resumable investigation of
 intermittent CPU-sensitive process faults. It runs a trusted workload across
 deterministic CPU-affinity schedules and records reviewable evidence. Observed

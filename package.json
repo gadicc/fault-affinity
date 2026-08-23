@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "Linux harness for bounded, resumable CPU-affinity fault diagnostics",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "fault-affinity": "./fault-affinity.mjs"
