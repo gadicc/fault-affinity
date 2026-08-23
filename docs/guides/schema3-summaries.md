@@ -25,6 +25,9 @@ The text output includes:
 - schema-3 manifest version, generation, and workload digest;
 - `not-bound`, `empty`, `incomplete`, or `complete` phase status;
 - committed and scheduled wave, session, or attempt counts;
+- the next uncommitted scheduled unit for every incomplete bound phase;
+- an `interrupted` or `reconciled` `attempt-armed.json` breadcrumb when present,
+  always labeled non-evidence;
 - outcome category and label counts;
 - per-context CPU-group and pinned-concurrent counts;
 - per-leg controlled-load counts;
@@ -33,7 +36,10 @@ The text output includes:
 - per-CPU exact counts.
 
 Only committed, already validated outcomes appear. An incomplete phase remains
-explicit and its uncommitted slot is not counted.
+explicit and its next unit is not counted. An `attempt-armed.json` breadcrumb
+means the exclusive owner durably entered that scheduled unit before its normal
+return path. It does not prove process launch, completion, an outcome, or a
+causal relationship to a machine reset.
 
 ## Read JSON
 
@@ -49,6 +55,8 @@ node fault-affinity.mjs summarize \
 JSON preserves category and label as separate fields. Consumers should check
 the top-level `version`, each phase `status`, and the committed and scheduled
 counts rather than inferring completion from a nonempty outcome list.
+The additive top-level `attemptArmed` object has `evidence: false`; `status` is
+`none`, `interrupted`, or `reconciled`.
 
 ## Summarize a dual-workload bundle
 

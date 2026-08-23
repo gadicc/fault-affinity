@@ -17,12 +17,18 @@ node fault-affinity.mjs inspect --workload wasm-churn
   preserves the published exact-only identity.
 - `wasm-churn-suite` runs the same trigger with a distinct identity declaring
   baseline, group, exact-CPU, and pinned-concurrent capabilities. It is the
-  recommended built-in for a version-7 diagnostic campaign.
+  recommended built-in for a version-7 diagnostic campaign. On unstable
+  hardware its concurrent phases can provoke a whole-system hang or reboot;
+  do not run it beside valuable work merely because the trigger is reduced.
 - `yes-load` is the recommended controlled-load condition. Fault Affinity
   starts one `/usr/bin/yes` process per declared load CPU, discards its output,
   verifies singleton affinity and process identity, and stops the complete set
   after B. Its one-hour deadline is an outer safety bound, not the planned
   session duration.
+
+Disabling turbo or applying another platform mitigation may reduce a fault's
+frequency, but the harness does not treat that as a safety boundary. Plan live
+campaigns for a maintenance window and keep unrelated data protected.
 - `node-pglite` is the historical heavyweight trigger. It keeps
   `child.mjs`, `package.json`, and `package-lock.json` in provenance and requires
   the installed PGlite dependency at execution time; this ID remains

@@ -26,6 +26,7 @@ import { buildPinnedConcurrentPhaseManifest } from "../pinned-concurrent-phase.m
 import { buildControlledLoadSessionManifest } from "../controlled-load-session.mjs";
 import { readLinuxProcessIdentity, runWorkloadAttempt } from "../attempt-runner.mjs";
 import {
+  SCHEMA3_ATTEMPT_ARMED_FILE,
   SCHEMA3_BUNDLE_FILE,
   SCHEMA3_BASELINE_STATE_DIRECTORY,
   SCHEMA3_EXACT_CPU_STATE_DIRECTORY,
@@ -47,7 +48,7 @@ import {
   runOneSchema3PinnedConcurrentWave,
   runOneSchema3ControlledLoadSession,
 } from "../schema3-bundle.mjs";
-import { createFileStateAdapter } from "../pinned-protocol.mjs";
+import { canonicalProtocolJson, createFileStateAdapter } from "../pinned-protocol.mjs";
 import { resolveWorkloadSpec } from "../workload-spec.mjs";
 import {
   leaseRetentionWorkloadSpec,
@@ -616,6 +617,13 @@ test("the execution lease makes selecting, running, and committing one slot indi
     runAttempt,
   });
   await started.promise;
+  const armed = JSON.parse(readFileSync(
+    path.join(bundleDir, SCHEMA3_ATTEMPT_ARMED_FILE),
+    "utf8",
+  ));
+  assert.equal(armed.phase, "isolated-exact-cpu");
+  assert.equal(armed.unit.ordinal, 1);
+  assert.equal(armed.unit.cpu, exactManifest.schedule.cpus[0]);
   await assert.rejects(runOneSchema3ExactCpuAttempt({
     resolved,
     bundleDir,
@@ -630,10 +638,97 @@ test("the execution lease makes selecting, running, and committing one slot indi
   const completed = await first;
   assert.equal(completed.result.reason, "committed");
   assert.equal(completed.bundle.exactCpu.progress.status, "complete");
+  assert.equal(existsSync(path.join(bundleDir, SCHEMA3_ATTEMPT_ARMED_FILE)), false);
 
   const noOp = await runOneSchema3ExactCpuAttempt({ resolved, bundleDir, runAttempt });
   assert.equal(noOp.result.reason, "complete");
   assert.equal(launches, 1);
+});
+
+test("an attempt-armed breadcrumb survives interruption but never becomes outcome evidence", {
+  timeout: 10_000,
+}, async () => {
+  const resolved = workload();
+  const manifest = bundleManifest(resolved);
+  const bundleDir = bundleDirectory();
+  const initialized = await initializeSchema3Bundle({ resolved, manifest, bundleDir });
+  const slot = initialized.exactCpu.progress.nextSlot;
+  const record = {
+    version: 1,
+    bundleGeneration: manifest.bundleGeneration,
+    phase: "isolated-exact-cpu",
+    startedAt: "2026-08-23T15:00:00.000Z",
+    unit: {
+      ordinal: slot.ordinal,
+      contextId: null,
+      cpu: slot.cpu,
+      controllerCpu: null,
+      childCount: null,
+    },
+  };
+  await createFileStateAdapter(bundleDir).commit(
+    SCHEMA3_ATTEMPT_ARMED_FILE,
+    Buffer.from(`${canonicalProtocolJson(record)}\n`),
+  );
+
+  const interrupted = await readSchema3Bundle({ resolved, bundleDir });
+  assert.deepEqual(interrupted.attemptArmed, {
+    ...record,
+    status: "interrupted",
+    evidence: false,
+  });
+  assert.equal(interrupted.exactCpu.progress.committedAttempts, 0);
+
+  const resultFixture = await validPinnedResult(resolved, manifest.exactCpu.manifest);
+  const retried = await runOneSchema3ExactCpuAttempt({
+    resolved,
+    bundleDir,
+    runAttempt: async () => resultFixture,
+  });
+  assert.equal(retried.result.reason, "committed");
+  assert.equal("attemptArmed" in retried.bundle, false);
+  assert.equal(existsSync(path.join(bundleDir, SCHEMA3_ATTEMPT_ARMED_FILE)), false);
+
+  // Simulate the narrow crash window after evidence publication but before
+  // breadcrumb removal. It reconciles to the last committed slot and is not
+  // described as an interrupted attempt.
+  await createFileStateAdapter(bundleDir).commit(
+    SCHEMA3_ATTEMPT_ARMED_FILE,
+    Buffer.from(`${canonicalProtocolJson(record)}\n`),
+  );
+  const reconciled = await readSchema3Bundle({ resolved, bundleDir });
+  assert.equal(reconciled.attemptArmed.status, "reconciled");
+  assert.equal(reconciled.attemptArmed.evidence, false);
+  const complete = await runOneSchema3ExactCpuAttempt({ resolved, bundleDir });
+  assert.equal(complete.result.reason, "complete");
+  assert.equal(existsSync(path.join(bundleDir, SCHEMA3_ATTEMPT_ARMED_FILE)), false);
+});
+
+test("attempt-armed breadcrumbs fail closed when their schedule binding is invalid", async () => {
+  const resolved = workload();
+  const manifest = bundleManifest(resolved);
+  const bundleDir = bundleDirectory();
+  const initialized = await initializeSchema3Bundle({ resolved, manifest, bundleDir });
+  const slot = initialized.exactCpu.progress.nextSlot;
+  const record = {
+    version: 1,
+    bundleGeneration: manifest.bundleGeneration,
+    phase: "isolated-exact-cpu",
+    startedAt: "2026-08-23T15:00:00.000Z",
+    unit: {
+      ordinal: slot.ordinal + 1,
+      contextId: null,
+      cpu: slot.cpu,
+      controllerCpu: null,
+      childCount: null,
+    },
+  };
+  await createFileStateAdapter(bundleDir).commit(
+    SCHEMA3_ATTEMPT_ARMED_FILE,
+    Buffer.from(`${canonicalProtocolJson(record)}\n`),
+  );
+  await assert.rejects(readSchema3Bundle({ resolved, bundleDir }),
+    /neither the current nor last committed schedule unit/);
 });
 
 test("the schema-3 v2 lease makes a complete baseline wave one transaction", {
@@ -886,6 +981,7 @@ test("an incomplete schema-3 v5 session consumes no durable phase frontier", {
   assert.equal(incomplete.result.stage, "a1");
   assert.equal(incomplete.bundle.controlledLoad.progress.status, "empty");
   assert.equal(incomplete.bundle.controlledLoad.envelope, null);
+  assert.equal(existsSync(path.join(bundleDir, SCHEMA3_ATTEMPT_ARMED_FILE)), false);
 
   const retried = await runOneSchema3ControlledLoadSession({
     resolved,
@@ -913,6 +1009,7 @@ test("operationally invalid execution leaves the slot available for a retained p
   });
   assert.equal(invalid.result.reason, "runner-error");
   assert.equal(invalid.bundle.exactCpu.progress.committedAttempts, 0);
+  assert.equal(existsSync(path.join(bundleDir, SCHEMA3_ATTEMPT_ARMED_FILE)), false);
 
   // This harmless finite command uses the real supervisor. Its successful
   // protocol handshake proves the supervisor retained and validated the

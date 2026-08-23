@@ -25,15 +25,20 @@ function evidence(category = "pass", label = "exit-zero") {
 }
 
 function exactPhase(envelopes, cpus = [2, 3], totalAttempts = 4) {
+  const complete = envelopes.length === totalAttempts;
   return {
     manifest: { schedule: { cpus } },
     envelopes,
     progress: {
-      status: envelopes.length === totalAttempts ? "complete"
+      status: complete ? "complete"
         : envelopes.length === 0 ? "empty" : "incomplete",
-      complete: envelopes.length === totalAttempts,
+      complete,
       committedAttempts: envelopes.length,
       totalAttempts,
+      nextSlot: complete ? null : {
+        ordinal: envelopes.length + 1,
+        cpu: cpus[envelopes.length % cpus.length],
+      },
     },
   };
 }
@@ -101,8 +106,37 @@ test("a version-5 summary keeps complete A1/B/A2 and per-CPU outcomes distinct",
   }]);
   assert.equal(summary.phases.exactCpu.status, "incomplete");
   assert.equal(summary.phases.exactCpu.cpus[0].committedAttempts, 1);
+  assert.deepEqual(summary.phases.exactCpu.next, { ordinal: 3, cpu: 2 });
   assert.equal(Object.isFrozen(summary.phases.controlledLoad.legs), true);
   assert.match(renderSchema3BundleSummary(summary), /leg b condition=with-load.*target-fault/);
+  assert.match(renderSchema3BundleSummary(summary), /exact-CPU:.*next unit=3 cpu=2/);
+});
+
+test("summaries disclose an interrupted attempt-armed breadcrumb as non-evidence", () => {
+  const bundle = {
+    ...baseBundle(1),
+    attemptArmed: {
+      version: 1,
+      bundleGeneration: "c".repeat(32),
+      phase: "pinned-concurrent",
+      startedAt: "2026-08-23T15:00:00.000Z",
+      unit: {
+        ordinal: 16,
+        contextId: "ecluster-topo-example",
+        cpu: null,
+        controllerCpu: 0,
+        childCount: 4,
+      },
+      status: "interrupted",
+      evidence: false,
+    },
+    exactCpu: exactPhase([]),
+  };
+  const summary = buildSchema3BundleSummary(bundle);
+  assert.equal(summary.attemptArmed.status, "interrupted");
+  assert.equal(summary.attemptArmed.evidence, false);
+  assert.match(renderSchema3BundleSummary(summary),
+    /attempt armed: interrupted; phase=pinned-concurrent unit=16 .*non-evidence breadcrumb/);
 });
 
 test("a version-4 summary groups baseline, topology, and pinned outcomes", () => {

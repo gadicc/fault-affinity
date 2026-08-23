@@ -138,7 +138,7 @@ const BUILT_INS = Object.freeze({
     recommended: true,
     role: "Recommended dependency-free reduced trigger",
     risk: "standard",
-    liveWarning: "Continuously compiles, instantiates, and executes fresh WebAssembly modules until the bounded attempt ends.",
+    liveWarning: "Continuously compiles, instantiates, and executes fresh WebAssembly modules until the bounded attempt ends. On an unstable system this can provoke process faults or a whole-system hang or reboot; protect unrelated work and use a maintenance window.",
     buildSpec() {
       return wasmChurnSpec({
         id: "wasm-churn",
@@ -153,7 +153,7 @@ const BUILT_INS = Object.freeze({
     recommended: true,
     role: "Recommended dependency-free baseline and CPU-localization profile",
     risk: "standard",
-    liveWarning: "Continuously compiles, instantiates, and executes fresh WebAssembly modules; concurrent phases multiply CPU use.",
+    liveWarning: "Continuously compiles, instantiates, and executes fresh WebAssembly modules; concurrent phases multiply CPU use. On an unstable system this can provoke process faults or a whole-system hang or reboot; protect unrelated work and use a maintenance window.",
     buildSpec() {
       return wasmChurnSpec({
         id: "wasm-churn-suite",
@@ -173,7 +173,7 @@ const BUILT_INS = Object.freeze({
     recommended: true,
     role: "Recommended controlled-load condition",
     risk: "standard",
-    liveWarning: "Consumes one logical CPU per selected worker until planned stop; output is discarded and a one-hour safety deadline applies.",
+    liveWarning: "Consumes one logical CPU per selected worker until planned stop; output is discarded and a one-hour safety deadline applies. On an unstable system sustained multi-core load can provoke a whole-system hang or reboot.",
     buildSpec() {
       return yesLoadSpec();
     },

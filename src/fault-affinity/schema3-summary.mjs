@@ -71,9 +71,60 @@ function progress(value, unit) {
 }
 
 const DEBUGGER_OUTCOME_KINDS = new Set(["clean", "exited", "signaled", "captured", "error"]);
+const ATTEMPT_ARMED_PHASES = new Set([
+  "baseline-concurrent",
+  "cpu-groups",
+  "pinned-concurrent",
+  "controlled-load-aba",
+  "gdb-capture",
+  "isolated-exact-cpu",
+]);
 
 function notBound() {
-  return { status: "not-bound", complete: false };
+  return { status: "not-bound", complete: false, next: null };
+}
+
+function nextWave(value) {
+  if (value == null) return null;
+  return {
+    ordinal: value.ordinal,
+    ...(value.contextId === undefined ? {} : { contextId: value.contextId }),
+    ...(value.controllerCpu === undefined ? {} : { controllerCpu: value.controllerCpu }),
+    childCount: value.childCount,
+  };
+}
+
+function attemptArmedSummary(value, bundleGeneration) {
+  if (value === undefined) return { status: "none", evidence: false };
+  const recordKeys = [
+    "version", "bundleGeneration", "phase", "startedAt", "unit", "status", "evidence",
+  ];
+  const unitKeys = ["ordinal", "contextId", "cpu", "controllerCpu", "childCount"];
+  if (value === null || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).sort().join("\n") !== recordKeys.sort().join("\n") ||
+      !["interrupted", "reconciled"].includes(value.status) || value.evidence !== false ||
+      value.version !== 1 || value.bundleGeneration !== bundleGeneration ||
+      !ATTEMPT_ARMED_PHASES.has(value.phase) || typeof value.startedAt !== "string" ||
+      !Number.isFinite(Date.parse(value.startedAt)) ||
+      new Date(value.startedAt).toISOString() !== value.startedAt || value.unit === null ||
+      typeof value.unit !== "object" || Array.isArray(value.unit) ||
+      Object.keys(value.unit).sort().join("\n") !== unitKeys.sort().join("\n") ||
+      !Number.isSafeInteger(value.unit.ordinal) || value.unit.ordinal < 1 ||
+      !(value.unit.contextId === null || typeof value.unit.contextId === "string") ||
+      !["cpu", "controllerCpu"].every((key) => value.unit[key] === null ||
+        (Number.isSafeInteger(value.unit[key]) && value.unit[key] >= 0)) ||
+      !(value.unit.childCount === null ||
+        (Number.isSafeInteger(value.unit.childCount) && value.unit.childCount >= 1))) {
+    fail("attempt-armed breadcrumb is invalid");
+  }
+  return {
+    status: value.status,
+    evidence: false,
+    version: value.version,
+    phase: value.phase,
+    startedAt: value.startedAt,
+    unit: { ...value.unit },
+  };
 }
 
 function exactSummary(phase) {
@@ -89,6 +140,10 @@ function exactSummary(phase) {
   }
   return {
     ...progress(phase.progress, "attempts"),
+    next: phase.progress.nextSlot == null ? null : {
+      ordinal: phase.progress.nextSlot.ordinal,
+      cpu: phase.progress.nextSlot.cpu,
+    },
     outcomes: outcomeRows(all),
     cpus: [...byCpu.entries()].map(([cpu, evidences]) => ({
       cpu,
@@ -104,6 +159,7 @@ function baselineSummary(phase) {
     envelope.attempts.map((bound) => bound.attempt.evidence));
   return {
     ...progress(phase.progress, "waves"),
+    next: nextWave(phase.progress.nextWave),
     committedAttempts: phase.progress.committedAttempts,
     scheduledAttempts: phase.progress.totalAttempts,
     outcomes: outcomeRows(evidences),
@@ -137,6 +193,7 @@ function contextSummary(phase, kind) {
   const evidences = [...contexts.values()].flatMap((context) => context.evidences);
   return {
     ...progress(phase.progress, "waves"),
+    next: nextWave(phase.progress.nextWave),
     committedAttempts: phase.progress.committedAttempts,
     scheduledAttempts: phase.progress.totalAttempts,
     outcomes: outcomeRows(evidences),
@@ -172,6 +229,10 @@ function controlledLoadSummary(phase) {
     }));
   return {
     ...progress(phase.progress, "sessions"),
+    next: phase.progress.complete ? null : {
+      ordinal: 1,
+      targetCpu: phase.manifest.execution.targetCpu,
+    },
     targetCpu: phase.manifest.execution.targetCpu,
     workerCpus: [...phase.manifest.execution.workerCpus],
     attemptsPerLeg: phase.manifest.schedule.attemptsPerLeg,
@@ -243,6 +304,10 @@ function debuggerSummary(phase) {
     scheduled: value.maxRuns,
     captured: value.capturedRuns,
     maxCaptures: value.maxCaptures,
+    next: complete ? null : {
+      run: value.nextRun ?? value.committedRuns + 1,
+      cpu: phase.manifest?.schedule?.cpu ?? null,
+    },
     outcomes,
     runs,
   };
@@ -269,6 +334,10 @@ export function buildSchema3BundleSummary(bundle) {
       manifestBinding: { ...bundle.manifestBinding },
     },
     workload: workloadIdentity(bundle.manifest.workload, "measured workload"),
+    attemptArmed: attemptArmedSummary(
+      bundle.attemptArmed,
+      bundle.manifest.bundleGeneration,
+    ),
     ...([5, 7].includes(version) ? {
       conditionWorkload: workloadIdentity(
         bundle.manifest.auxiliaryWorkload,
@@ -302,6 +371,28 @@ function progressText(phase, unit) {
   return `${phase.status}; ${phase.committed}/${phase.scheduled} ${unit}`;
 }
 
+function scheduledUnitText(value) {
+  if (value === null) return "";
+  const ordinal = value.run === undefined ? value.ordinal : value.run;
+  const parts = [`${value.run === undefined ? "unit" : "run"}=${ordinal}`];
+  if (value.contextId !== undefined && value.contextId !== null) {
+    parts.push(`context=${value.contextId}`);
+  }
+  if (value.cpu !== undefined && value.cpu !== null) parts.push(`cpu=${value.cpu}`);
+  if (value.targetCpu !== undefined) parts.push(`target-cpu=${value.targetCpu}`);
+  if (value.controllerCpu !== undefined && value.controllerCpu !== null) {
+    parts.push(`controller=${value.controllerCpu}`);
+  }
+  if (value.childCount !== undefined && value.childCount !== null) {
+    parts.push(`children=${value.childCount}`);
+  }
+  return parts.join(" ");
+}
+
+function nextText(phase) {
+  return phase.next === null ? "" : `; next ${scheduledUnitText(phase.next)}`;
+}
+
 export function renderSchema3BundleSummary(summary) {
   if (summary?.version !== SCHEMA3_SUMMARY_VERSION) fail("summary version is unsupported");
   const lines = [
@@ -313,12 +404,19 @@ export function renderSchema3BundleSummary(summary) {
     lines.push(`condition workload: ${summary.conditionWorkload.id}; ` +
       `risk ${summary.conditionWorkload.risk}; digest ${summary.conditionWorkload.digest}`);
   }
+  if (summary.attemptArmed.status !== "none") {
+    lines.push(`attempt armed: ${summary.attemptArmed.status}; ` +
+      `phase=${summary.attemptArmed.phase} ${scheduledUnitText(summary.attemptArmed.unit)}; ` +
+      `started=${summary.attemptArmed.startedAt}; non-evidence breadcrumb`);
+  }
   const { baseline, groups, pinnedConcurrent, controlledLoad, exactCpu } = summary.phases;
   const debuggerPhase = summary.phases.debugger;
   lines.push(`baseline: ${progressText(baseline, "waves")}` +
-    `${baseline.outcomes === undefined ? "" : `; outcomes ${outcomesText(baseline.outcomes)}`}`);
+    `${baseline.outcomes === undefined ? "" : `; outcomes ${outcomesText(baseline.outcomes)}`}` +
+    nextText(baseline));
   lines.push(`groups: ${progressText(groups, "waves")}` +
-    `${groups.outcomes === undefined ? "" : `; outcomes ${outcomesText(groups.outcomes)}`}`);
+    `${groups.outcomes === undefined ? "" : `; outcomes ${outcomesText(groups.outcomes)}`}` +
+    nextText(groups));
   for (const context of groups.contexts ?? []) {
     lines.push(`  context ${context.id} cpus=${context.cpus.join(",")} ` +
       `waves=${context.committedWaves} attempts=${context.committedAttempts}; ` +
@@ -326,20 +424,23 @@ export function renderSchema3BundleSummary(summary) {
   }
   lines.push(`pinned-concurrent: ${progressText(pinnedConcurrent, "waves")}` +
     `${pinnedConcurrent.outcomes === undefined
-      ? "" : `; outcomes ${outcomesText(pinnedConcurrent.outcomes)}`}`);
+      ? "" : `; outcomes ${outcomesText(pinnedConcurrent.outcomes)}`}` +
+    nextText(pinnedConcurrent));
   for (const context of pinnedConcurrent.contexts ?? []) {
     lines.push(`  context ${context.id} controller=${context.controllerCpu} ` +
       `cpus=${context.cpus.join(",")} waves=${context.committedWaves} ` +
       `attempts=${context.committedAttempts}; outcomes ${outcomesText(context.outcomes)}`);
   }
-  lines.push(`controlled-load: ${progressText(controlledLoad, "sessions")}`);
+  lines.push(`controlled-load: ${progressText(controlledLoad, "sessions")}` +
+    nextText(controlledLoad));
   for (const leg of controlledLoad.legs ?? []) {
     lines.push(`  leg ${leg.leg} condition=${leg.condition} attempts=${leg.committedAttempts}; ` +
       `outcomes ${outcomesText(leg.outcomes)}`);
   }
   lines.push(`debugger: ${progressText(debuggerPhase, "runs")}` +
     `${debuggerPhase.status === "not-bound"
-      ? "" : `; captured ${debuggerPhase.captured}/${debuggerPhase.maxCaptures}`}`);
+      ? "" : `; captured ${debuggerPhase.captured}/${debuggerPhase.maxCaptures}`}` +
+    nextText(debuggerPhase));
   for (const run of debuggerPhase.runs ?? []) {
     lines.push(`  run ${run.run}: ${run.outcome.kind}` +
       `${run.outcome.signal === undefined ? "" : ` signal=${run.outcome.signal}`}` +
@@ -350,7 +451,7 @@ export function renderSchema3BundleSummary(summary) {
       `${run.outcome.code === undefined ? "" : ` error=${run.outcome.code}`}`);
   }
   lines.push(`exact-CPU: ${progressText(exactCpu, "attempts")}; ` +
-    `outcomes ${outcomesText(exactCpu.outcomes)}`);
+    `outcomes ${outcomesText(exactCpu.outcomes)}` + nextText(exactCpu));
   for (const cpu of exactCpu.cpus) {
     lines.push(`  cpu ${cpu.cpu}: attempts=${cpu.committedAttempts}; ` +
       `outcomes ${outcomesText(cpu.outcomes)}`);

@@ -260,6 +260,7 @@ test("initialization creates exactly the v6 state directories and rereads idempo
     scheduled: 4,
     captured: 0,
     maxCaptures: 2,
+    next: { run: 1, cpu: files.cpu },
     outcomes: [],
     runs: [],
   });

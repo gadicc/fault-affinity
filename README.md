@@ -65,7 +65,13 @@ report files, and interpretation.
 ## Safety
 
 > [!CAUTION]
-> Live workloads consume CPU and may terminate abnormally. A campaign exercises many CPU placements, and its `yes-load` leg loads every selected worker CPU. Always inspect a dry run first. The historical PGlite workload uses about 1.2 GiB per child and can exhaust memory under concurrency.
+> Live workloads consume CPU and may terminate abnormally. On unstable hardware,
+> the reduced WebAssembly campaign and sustained `yes-load` condition can hang or
+> reboot the whole system, risking unrelated work or unsaved data. Use a
+> maintenance window, keep backups current, close valuable workloads, and inspect
+> a dry run first. A mitigation such as disabling turbo can change reproduction
+> frequency but is not a safety guarantee. The historical PGlite workload uses
+> about 1.2 GiB per child and can also exhaust memory under concurrency.
 
 > [!WARNING]
 > The native `churn-mem` experiment produced kernel oopses on the affected machine, including an unkillable process that required reboot. It is never a built-in campaign workload. Do not run native churn modes unless a hang or forced reboot is acceptable.

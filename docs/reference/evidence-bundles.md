@@ -200,3 +200,17 @@ files are accepted only for v7; older manifest readers reject them as foreign
 root artifacts. The report is reproducible from validated phase evidence and
 does not replace it as the authority. See
 [run a generic diagnostic campaign](../guides/generic-diagnose-campaign.md).
+
+All schema-3 manifest versions may also contain the optional root file
+`attempt-armed.json`. The bundle owner publishes it durably, under the exclusive
+execution lease, immediately before entering one scheduled phase unit. It binds
+the bundle generation, phase, exact schedule unit, and first arm timestamp. A
+normal return removes it after any complete envelope publication.
+
+The authoritative reader accepts a remaining marker only when it matches the
+current uncommitted unit (`interrupted`) or the last committed unit
+(`reconciled`, covering the narrow commit-before-removal window). Any other
+generation, unit, shape, or noncanonical encoding fails closed. The marker is
+operational context with `evidence: false`; complete phase envelopes remain the
+only outcome evidence. In particular, the marker cannot prove that the child
+process launched or that its scheduled unit caused a machine reset.

@@ -98,6 +98,9 @@ export const SCHEMA3_BUNDLE_MANIFEST_V7_VERSION = 7;
 export const SCHEMA3_RUN_SCHEMA_VERSION = 3;
 export const SCHEMA3_BUNDLE_FILE = "fault-affinity-bundle.json";
 export const SCHEMA3_BUNDLE_FILE_MAX_BYTES = 8 * 1024 * 1024;
+export const SCHEMA3_ATTEMPT_ARMED_FILE = "attempt-armed.json";
+export const SCHEMA3_ATTEMPT_ARMED_VERSION = 1;
+export const SCHEMA3_ATTEMPT_ARMED_MAX_BYTES = 4 * 1024;
 export const SCHEMA3_CAMPAIGN_REPORT_JSON_FILE = "report.json";
 export const SCHEMA3_CAMPAIGN_REPORT_MARKDOWN_FILE = "report.md";
 export const SCHEMA3_CAMPAIGN_REPORT_COMPLETION_FILE = "report.complete.json";
@@ -117,6 +120,14 @@ const PHASE_CONTROLS = new Set([
   "unavailable",
 ]);
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const ATTEMPT_ARMED_PHASES = new Set([
+  "baseline-concurrent",
+  "cpu-groups",
+  "pinned-concurrent",
+  "controlled-load-aba",
+  "gdb-capture",
+  "isolated-exact-cpu",
+]);
 
 export class Schema3BundleError extends Error {
   constructor(message) {
@@ -797,6 +808,7 @@ async function listRoot(adapter) {
   }
   const allowed = new Set([
     SCHEMA3_BUNDLE_FILE,
+    SCHEMA3_ATTEMPT_ARMED_FILE,
     "state",
     SCHEMA3_CAMPAIGN_REPORT_JSON_FILE,
     SCHEMA3_CAMPAIGN_REPORT_MARKDOWN_FILE,
@@ -890,6 +902,126 @@ async function readManifest(resolved, auxiliary, adapter) {
   )),
     "schema-3 bundle manifest is not canonical");
   return manifest;
+}
+
+function attemptArmedUnit({ ordinal, contextId = null, cpu = null,
+  controllerCpu = null, childCount = null }) {
+  return { ordinal, contextId, cpu, controllerCpu, childCount };
+}
+
+function scheduledAttemptArmedUnit(bundle, phase, position) {
+  const current = position === "current";
+  let value;
+  switch (phase) {
+    case "baseline-concurrent":
+      value = current ? bundle.baseline?.progress.nextWave
+        : bundle.baseline?.envelopes.at(-1)?.wave;
+      return value == null ? null : attemptArmedUnit({
+        ordinal: value.ordinal,
+        childCount: value.childCount,
+      });
+    case "cpu-groups":
+      value = current ? bundle.groups?.progress.nextWave
+        : bundle.groups?.envelopes.at(-1)?.wave;
+      return value == null ? null : attemptArmedUnit({
+        ordinal: value.ordinal,
+        contextId: value.contextId,
+        childCount: value.childCount,
+      });
+    case "pinned-concurrent":
+      value = current ? bundle.pinnedConcurrent?.progress.nextWave
+        : bundle.pinnedConcurrent?.envelopes.at(-1)?.wave;
+      return value == null ? null : attemptArmedUnit({
+        ordinal: value.ordinal,
+        contextId: value.contextId,
+        controllerCpu: value.controllerCpu,
+        childCount: value.childCount,
+      });
+    case "controlled-load-aba":
+      if (bundle.controlledLoad === undefined ||
+          (current ? bundle.controlledLoad.progress.complete
+            : bundle.controlledLoad.envelope === null)) return null;
+      return attemptArmedUnit({
+        ordinal: 1,
+        cpu: bundle.controlledLoad.manifest.execution.targetCpu,
+      });
+    case "gdb-capture":
+      value = current ? bundle.debugger?.progress.nextRun
+        : bundle.debugger?.attempts.at(-1)?.run;
+      return value == null ? null : attemptArmedUnit({
+        ordinal: value,
+        cpu: bundle.debugger.manifest.schedule.cpu,
+      });
+    case "isolated-exact-cpu":
+      value = current ? bundle.exactCpu.progress.nextSlot
+        : bundle.exactCpu.envelopes.at(-1)?.slot;
+      return value == null ? null : attemptArmedUnit({
+        ordinal: value.ordinal,
+        cpu: value.cpu,
+      });
+    default:
+      fail("schema-3 attempt-armed phase is unsupported");
+  }
+}
+
+function parseAttemptArmedRecord(bytes, bundle) {
+  requireCondition(Buffer.isBuffer(bytes) && bytes.length > 0 &&
+    bytes.length <= SCHEMA3_ATTEMPT_ARMED_MAX_BYTES,
+  "schema-3 attempt-armed record is empty or oversized");
+  const value = decodeJsonLine(bytes, "schema-3 attempt-armed record");
+  exactKeys(value, ["version", "bundleGeneration", "phase", "startedAt", "unit"],
+    "schema-3 attempt-armed record");
+  requireCondition(value.version === SCHEMA3_ATTEMPT_ARMED_VERSION,
+    `schema-3 attempt-armed version must be ${SCHEMA3_ATTEMPT_ARMED_VERSION}`);
+  requireCondition(value.bundleGeneration === bundle.manifest.bundleGeneration,
+    "schema-3 attempt-armed record belongs to a different bundle generation");
+  requireCondition(typeof value.phase === "string" && ATTEMPT_ARMED_PHASES.has(value.phase),
+    "schema-3 attempt-armed phase is invalid");
+  requireCondition(typeof value.startedAt === "string" &&
+    Number.isFinite(Date.parse(value.startedAt)) &&
+    new Date(value.startedAt).toISOString() === value.startedAt,
+  "schema-3 attempt-armed timestamp is not canonical ISO 8601");
+  exactKeys(value.unit, ["ordinal", "contextId", "cpu", "controllerCpu", "childCount"],
+    "schema-3 attempt-armed unit");
+  requireCondition(Number.isSafeInteger(value.unit.ordinal) && value.unit.ordinal >= 1,
+    "schema-3 attempt-armed ordinal is invalid");
+  requireCondition(value.unit.contextId === null ||
+    (typeof value.unit.contextId === "string" && value.unit.contextId.length > 0 &&
+      Buffer.byteLength(value.unit.contextId) <= 256),
+  "schema-3 attempt-armed context is invalid");
+  for (const key of ["cpu", "controllerCpu"]) {
+    requireCondition(value.unit[key] === null ||
+      (Number.isSafeInteger(value.unit[key]) && value.unit[key] >= 0),
+    `schema-3 attempt-armed ${key} is invalid`);
+  }
+  requireCondition(value.unit.childCount === null ||
+    (Number.isSafeInteger(value.unit.childCount) && value.unit.childCount >= 1),
+  "schema-3 attempt-armed child count is invalid");
+  requireCondition(bytes.equals(canonicalLine(value)),
+    "schema-3 attempt-armed record is not canonical");
+
+  const current = scheduledAttemptArmedUnit(bundle, value.phase, "current");
+  const previous = scheduledAttemptArmedUnit(bundle, value.phase, "previous");
+  const sameUnit = (left, right) => left !== null && right !== null &&
+    canonicalProtocolJson(left) === canonicalProtocolJson(right);
+  const status = sameUnit(value.unit, current) ? "interrupted"
+    : sameUnit(value.unit, previous) ? "reconciled" : null;
+  requireCondition(status !== null,
+    "schema-3 attempt-armed unit is neither the current nor last committed schedule unit");
+  return deepFreeze({ ...value, status, evidence: false });
+}
+
+async function readAttemptArmedRecord(adapter, bundle) {
+  let bytes;
+  try {
+    bytes = await adapter.read(SCHEMA3_ATTEMPT_ARMED_FILE, SCHEMA3_ATTEMPT_ARMED_MAX_BYTES);
+  } catch (error) {
+    if (error instanceof PinnedProtocolStateError) {
+      fail(`schema-3 attempt-armed record could not be read safely: ${error.message}`);
+    }
+    throw error;
+  }
+  return parseAttemptArmedRecord(bytes, bundle);
 }
 
 async function readBundleState(resolved, auxiliary, bundleDir) {
@@ -988,7 +1120,7 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
   requireCondition(canonicalProtocolJson(exactCpu.manifest) ===
     canonicalProtocolJson(manifest.exactCpu.manifest),
   "schema-3 exact-CPU state belongs to a different phase manifest");
-  return deepFreeze({
+  const bundle = {
     manifest,
     manifestBinding: schema3BundleManifestBinding(resolved, manifest, auxiliary),
     ...(baseline === undefined ? {} : { baseline }),
@@ -997,7 +1129,44 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
     ...(controlledLoad === undefined ? {} : { controlledLoad }),
     ...(debuggerPhase === undefined ? {} : { debugger: debuggerPhase }),
     exactCpu,
+  };
+  const attemptArmed = names.has(SCHEMA3_ATTEMPT_ARMED_FILE)
+    ? await readAttemptArmedRecord(adapter, bundle) : undefined;
+  return deepFreeze({
+    ...bundle,
+    ...(attemptArmed === undefined ? {} : { attemptArmed }),
   });
+}
+
+async function armSchema3ScheduledUnit(bundle, bundleDir, phase) {
+  const adapter = createFileStateAdapter(bundleDir);
+  if (bundle.attemptArmed?.status === "reconciled") {
+    await adapter.remove(SCHEMA3_ATTEMPT_ARMED_FILE);
+    const { attemptArmed: _removed, ...withoutAttemptArmed } = bundle;
+    bundle = withoutAttemptArmed;
+  }
+  const unit = scheduledAttemptArmedUnit(bundle, phase, "current");
+  if (unit === null) return { bundle, armed: false };
+  if (bundle.attemptArmed !== undefined) {
+    requireCondition(bundle.attemptArmed.phase === phase &&
+      canonicalProtocolJson(bundle.attemptArmed.unit) === canonicalProtocolJson(unit),
+    "schema-3 bundle has an interrupted attempt-armed record for a different unit");
+    return { bundle, armed: true };
+  }
+  const value = {
+    version: SCHEMA3_ATTEMPT_ARMED_VERSION,
+    bundleGeneration: bundle.manifest.bundleGeneration,
+    phase,
+    startedAt: new Date().toISOString(),
+    unit,
+  };
+  await adapter.commit(SCHEMA3_ATTEMPT_ARMED_FILE, canonicalLine(value));
+  return { bundle, armed: true };
+}
+
+async function clearSchema3ScheduledUnit(resolved, auxiliary, bundleDir, armed) {
+  if (armed) await createFileStateAdapter(bundleDir).remove(SCHEMA3_ATTEMPT_ARMED_FILE);
+  return readBundleState(resolved, auxiliary, bundleDir);
 }
 
 function validateAttemptOptions(value, label) {
@@ -1145,6 +1314,9 @@ export async function runOneSchema3ExactCpuAttempt({
   return withBundleExecutionLease({ bundleDir, flockPath, waitMs: leaseWaitMs }, async (lease) => {
     let bundle = await readBundleState(resolved, auxiliary, bundleDir);
     assertBundleExecutionLeaseHeld(lease);
+    const armedState = await armSchema3ScheduledUnit(
+      bundle, bundleDir, "isolated-exact-cpu");
+    bundle = armedState.bundle;
     const result = await runNextExactCpuPhaseAttempt({
       resolved,
       manifest: bundle.manifest.exactCpu.manifest,
@@ -1162,8 +1334,9 @@ export async function runOneSchema3ExactCpuAttempt({
         envelope: result.envelope,
         stateDir: path.join(bundleDir, SCHEMA3_EXACT_CPU_STATE_DIRECTORY),
       });
-      bundle = await readBundleState(resolved, auxiliary, bundleDir);
     }
+    bundle = await clearSchema3ScheduledUnit(
+      resolved, auxiliary, bundleDir, armedState.armed);
     assertBundleExecutionLeaseHeld(lease);
     return deepFreeze({
       result,
@@ -1191,6 +1364,9 @@ export async function runOneSchema3BaselineWave({
     requireCondition(bundle.baseline !== undefined,
     "schema-3 bundle manifest does not bind a baseline phase");
     assertBundleExecutionLeaseHeld(lease);
+    const armedState = await armSchema3ScheduledUnit(
+      bundle, bundleDir, "baseline-concurrent");
+    bundle = armedState.bundle;
     const result = await runNextBaselinePhaseWave({
       resolved,
       manifest: bundle.manifest.baseline.manifest,
@@ -1208,8 +1384,9 @@ export async function runOneSchema3BaselineWave({
         envelope: result.envelope,
         stateDir: path.join(bundleDir, SCHEMA3_BASELINE_STATE_DIRECTORY),
       });
-      bundle = await readBundleState(resolved, auxiliary, bundleDir);
     }
+    bundle = await clearSchema3ScheduledUnit(
+      resolved, auxiliary, bundleDir, armedState.armed);
     assertBundleExecutionLeaseHeld(lease);
     return deepFreeze({
       result,
@@ -1237,6 +1414,8 @@ export async function runOneSchema3GroupWave({
     requireCondition(bundle.groups !== undefined,
     "schema-3 bundle manifest does not bind a group phase");
     assertBundleExecutionLeaseHeld(lease);
+    const armedState = await armSchema3ScheduledUnit(bundle, bundleDir, "cpu-groups");
+    bundle = armedState.bundle;
     const result = await runNextGroupPhaseWave({
       resolved,
       manifest: bundle.manifest.groups.manifest,
@@ -1254,8 +1433,9 @@ export async function runOneSchema3GroupWave({
         envelope: result.envelope,
         stateDir: path.join(bundleDir, SCHEMA3_GROUP_STATE_DIRECTORY),
       });
-      bundle = await readBundleState(resolved, auxiliary, bundleDir);
     }
+    bundle = await clearSchema3ScheduledUnit(
+      resolved, auxiliary, bundleDir, armedState.armed);
     assertBundleExecutionLeaseHeld(lease);
     return deepFreeze({
       result,
@@ -1291,6 +1471,9 @@ export async function runOneSchema3PinnedConcurrentWave({
       bundle.pinnedConcurrent !== undefined,
     "schema-3 bundle manifest does not bind a pinned-concurrent phase");
     assertBundleExecutionLeaseHeld(lease);
+    const armedState = await armSchema3ScheduledUnit(
+      bundle, bundleDir, "pinned-concurrent");
+    bundle = armedState.bundle;
     const result = await runNextPinnedConcurrentPhaseWave({
       resolved,
       manifest: bundle.manifest.pinnedConcurrent.manifest,
@@ -1309,8 +1492,9 @@ export async function runOneSchema3PinnedConcurrentWave({
         envelope: result.envelope,
         stateDir: path.join(bundleDir, SCHEMA3_PINNED_CONCURRENT_STATE_DIRECTORY),
       });
-      bundle = await readBundleState(resolved, auxiliary, bundleDir);
     }
+    bundle = await clearSchema3ScheduledUnit(
+      resolved, auxiliary, bundleDir, armedState.armed);
     assertBundleExecutionLeaseHeld(lease);
     return deepFreeze({
       result,
@@ -1348,6 +1532,9 @@ export async function runOneSchema3ControlledLoadSession({
       bundle.controlledLoad !== undefined,
     "schema-3 bundle manifest does not bind a controlled-load phase");
     assertBundleExecutionLeaseHeld(lease);
+    const armedState = await armSchema3ScheduledUnit(
+      bundle, bundleDir, "controlled-load-aba");
+    bundle = armedState.bundle;
     if (bundle.controlledLoad.progress.complete) {
       return deepFreeze({
         result: {
@@ -1383,8 +1570,9 @@ export async function runOneSchema3ControlledLoadSession({
         envelope: result.envelope,
         stateDir: path.join(bundleDir, SCHEMA3_CONTROLLED_LOAD_STATE_DIRECTORY),
       });
-      bundle = await readBundleState(resolved, auxiliary, bundleDir);
     }
+    bundle = await clearSchema3ScheduledUnit(
+      resolved, auxiliary, bundleDir, armedState.armed);
     assertBundleExecutionLeaseHeld(lease);
     return deepFreeze({
       result,
@@ -1417,6 +1605,8 @@ export async function runOneSchema3DebuggerAttempt({
       bundle.debugger !== undefined,
     "schema-3 bundle manifest does not bind a debugger phase");
     assertBundleExecutionLeaseHeld(lease);
+    const armedState = await armSchema3ScheduledUnit(bundle, bundleDir, "gdb-capture");
+    bundle = armedState.bundle;
     if (bundle.debugger.progress.complete) {
       return deepFreeze({
         result: {
@@ -1454,8 +1644,9 @@ export async function runOneSchema3DebuggerAttempt({
         // a failed publication must never leak the process-local handle.
         if (result.attempt.io.disposed === false) result.attempt.io.dispose();
       }
-      bundle = await readBundleState(resolved, auxiliary, bundleDir);
     }
+    bundle = await clearSchema3ScheduledUnit(
+      resolved, auxiliary, bundleDir, armedState.armed);
     assertBundleExecutionLeaseHeld(lease);
     return deepFreeze({
       result,

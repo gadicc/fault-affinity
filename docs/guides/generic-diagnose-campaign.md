@@ -31,10 +31,18 @@ The dry run resolves and hashes both workload identities, reads CPU topology,
 checks the invoking process's CPU allowance, and prints the complete plan. It
 does not start either workload or create the output directory.
 
-Do not start a live campaign while unrelated load matters to the experiment.
-External activity is not controlled or recorded as the campaign condition and
-can make baseline, group, pinned, exact, and recovery observations harder to
-compare.
+> [!CAUTION]
+> A reduced trigger is still a deliberate stressor. On unstable hardware the
+> WebAssembly campaign or sustained multi-core condition can hang or reboot the
+> whole system, not merely terminate one child. Use a maintenance window, close
+> valuable workloads, save or back up unrelated data, and keep a second device
+> available for notes. Disabling turbo or another mitigation may lower the
+> reproduction rate but does not make a live campaign intrinsically safe.
+
+Do not start a live campaign while unrelated load matters to the experiment or
+while its loss would matter to you. External activity is not controlled or
+recorded as the campaign condition and can also make baseline, group, pinned,
+exact, and recovery observations harder to compare.
 
 ## Review the automatic topology
 
@@ -151,6 +159,14 @@ node fault-affinity.mjs diagnose \
 Resume validates the persisted manifest and both workload identities before
 continuing the first incomplete phase. It does not rediscover topology or
 accept fresh profile, target, load, seed, taskset, or plan options.
+
+Before each scheduled unit starts, the bundle durably publishes the optional
+root file `attempt-armed.json`. If a reset prevents normal cleanup, `summarize`
+can identify the exact current wave, run, session, or CPU slot the owner had
+entered. This breadcrumb is explicitly **not outcome evidence**: it does not
+prove that a child launched, that the unit completed, or that the unit caused a
+reset. A normal return removes it. A marker left after its unit's complete
+envelope committed is reported as `reconciled`, not `interrupted`.
 
 ## Read the final report
 

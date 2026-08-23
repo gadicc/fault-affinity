@@ -42,3 +42,4 @@ boundary.
 | [ADR 0033](0033-built-in-controlled-load-recipes.md) | Accepted | Make the reduced A1/B/A2 path repeatable through the `yes-load` built-in and `wasm-churn-aba` recipe without changing manifest v5. |
 | [ADR 0034](0034-schema3-manifest-v7-campaign.md) | Accepted | Combine topology screening, exact-CPU localization, and focused controlled load in one immutable schema-3 v7 campaign. |
 | [ADR 0035](0035-public-diagnose-campaign-and-report.md) | Accepted | Publish automatic and explicit v7 diagnose campaigns with built-in recipes, complete resume, and bound statistical reports. |
+| [ADR 0036](0036-schema3-attempt-armed-breadcrumb.md) | Accepted | Retain one schedule-bound, non-evidence breadcrumb across an interrupted schema-3 attempt path. |
