@@ -28,6 +28,14 @@ and `controlled-load-plan.mjs` normalizes the A1/B/A2 and sibling exact
 schedules required by manifest version 5. The existing phase builders remain
 authoritative for canonical topology and schedule validation.
 
+`campaign-plan.mjs` combines those established shapes for manifest version 7.
+`campaign-topology.mjs` derives a deterministic plan from read-only Linux
+online, allowed, hybrid-class, cluster, and core topology. It refuses
+incomplete hybrid masks and keeps every resolved CPU and controller explicit
+before bundle creation. `campaign-recipes.mjs` owns the recommended reduced
+and retained historical campaign conveniences; recipe names do not become
+evidence authority.
+
 `controlled-load-recipes.mjs` expands named convenience recipes into that same
 validated version-5 plan boundary; recipe names are not persisted as evidence
 authority.
@@ -55,6 +63,15 @@ cleared in a finally block. One bundle lease covers each attempt's selection,
 supervised adapter launch, complete-only envelope, and triple commit; an
 operationally invalid attempt stops the run nonzero without advancing the
 durable prefix.
+
+Campaign orchestration targets the combined manifest-v7 variant. It advances
+baseline, groups, pinned-concurrent, exact, and controlled-load in order while
+reusing each phase's established complete-prefix semantics and the bundle-wide
+lease. `campaign-report.mjs` derives statistics from an authoritatively read
+bundle, keeping wave, child, per-context, per-CPU, and A/B/A denominators
+separate. `campaign-report-store.mjs` commits deterministic JSON and Markdown
+before a manifest-and-artifact completion binding; those root files are
+derived output accepted only by v7 bundles.
 
 `schema3-summary.mjs` derives read-only text and versioned JSON from bundle
 objects that have already passed the authoritative schema-3 reader. It reports

@@ -23,8 +23,10 @@ The suite covers:
 - Argument and exit-code validation
 - Workload-spec and catalog validation, including custom-file provenance
 - Public exact-CPU CLI parsing, dry-run safety, fresh bundle creation, and resume
-- Public baseline, CPU-group, pinned-concurrent, and controlled-load CLI planning, fresh bundle creation, and complete-unit resume
-- Read-only schema-3 v1-v6 summaries with phase, context, leg, CPU, run, and typed-outcome counts
+- Public baseline, CPU-group, pinned-concurrent, controlled-load, and combined diagnose CLI planning, fresh bundle creation, and complete-unit resume
+- Hermetic automatic campaign-topology discovery, profile expansion, recipe defaults, and explicit plan validation
+- Schema-3 manifest-v7 combined ownership plus deterministic, bound campaign reports with separate denominators and statistical fixtures
+- Read-only schema-3 v1-v7 summaries with phase, context, leg, CPU, run, and typed-outcome counts
 - Generic debugger-phase manifest, materialized command-profile descriptor, structured control-protocol, bounded attempt-I/O validation, supervised adapter routing, complete-only attempt envelopes, and schema-3 manifest-v6 ownership without launching GDB
 - Public debugger command parsing, dry-run non-mutation, v6 creation, resume, capture/run caps, incomplete-attempt stops, interruption, lease-busy exit 75, HMAC-bound custom workloads, and per-run summary rendering with the fake debugger fixture
 - Internal shell-free attempt execution, deadlines, bounded output, and process-group cleanup
@@ -172,11 +174,21 @@ controlled-load store without requiring baseline, group, or pinned-concurrent
 capabilities. Its public integration fixture completes and resumes A1/B/A2,
 then resumes the sibling exact phase with the same auxiliary identity.
 
-The public summary command reuses the authoritative schema-3 reader and writes
-only text or versioned JSON to stdout. It never creates a bundle artifact. Unit
-fixtures cover every phase shape, and public integration tests summarize
-exact-only, dual-workload version-5, and debugger-focused version-6 bundles,
-including per-run typed debugger outcomes.
+Manifest version 7 combines the established baseline, group,
+pinned-concurrent, exact, and controlled-load phase manifests without changing
+their envelope meanings. Campaign-topology tests use temporary sysfs trees and
+an injected allowed-CPU list. Public integration runs only harmless finite
+custom measured and condition fixtures through all five phases, verifies
+resume, and checks deterministic JSON/Markdown report publication and tamper
+rejection. Built-in campaign coverage stops at recipe resolution and dry run.
+
+The public summary and report commands reuse the authoritative schema-3 reader
+and write only text or versioned JSON to stdout. They never create a bundle
+artifact. Unit fixtures cover every phase shape, and public integration tests
+summarize exact-only, dual-workload version-5, debugger-focused version-6, and
+combined version-7 bundles, including per-run typed debugger outcomes and
+campaign statistics. Report publication occurs only at successful campaign
+completion, with the completion binding written after both derived artifacts.
 
 The generic debugger stack is now complete through the public command.
 Its tests use a temporary inert executable and synthetic byte streams to cover
@@ -242,8 +254,8 @@ Manual crash experiments need an explicit operator, a reviewed plan, and a dispo
 ## Check documentation changes
 
 Documentation commands must reflect the current `--help` output. Do not present
-debugger or frequency adapters as public generic commands until their
-orchestration exists.
+an internal adapter as a public generic command until its orchestration exists.
+The debugger command is public; generic frequency orchestration is not.
 
 When headings move, search for repository-relative anchors:
 

@@ -1,7 +1,7 @@
 # Summarize a schema-3 bundle
 
 Use `fault-affinity summarize` to inspect committed evidence in any schema-3
-manifest version from 1 through 6. The command re-resolves the workload,
+manifest version from 1 through 7. The command re-resolves the workload,
 validates the complete bundle and every committed phase envelope, and writes a
 derived summary to standard output.
 
@@ -28,7 +28,8 @@ The text output includes:
 - outcome category and label counts;
 - per-context CPU-group and pinned-concurrent counts;
 - per-leg controlled-load counts;
-- aggregate debugger run and capture progress (manifest v6); and
+- aggregate debugger run and capture progress (manifest v6);
+- all five combined campaign phases (manifest v7); and
 - per-CPU exact counts.
 
 Only committed, already validated outcomes appear. An incomplete phase remains
@@ -49,10 +50,10 @@ JSON preserves category and label as separate fields. Consumers should check
 the top-level `version`, each phase `status`, and the committed and scheduled
 counts rather than inferring completion from a nonempty outcome list.
 
-## Summarize a controlled-load bundle
+## Summarize a dual-workload bundle
 
-Manifest version 5 binds a second workload identity. Supply the same condition
-definition used at creation:
+Manifest versions 5 and 7 bind a second workload identity. Supply the same
+condition definition used at creation:
 
 ```sh
 node fault-affinity.mjs summarize \
@@ -76,9 +77,29 @@ node fault-affinity.mjs summarize \
 An explicitly selected built-in condition may instead be repeated with
 `--condition-workload yes-load`.
 
+For a combined campaign, use its campaign recipe:
+
+```sh
+node fault-affinity.mjs summarize \
+  --bundle-dir diagnostics/wasm-campaign \
+  --recipe wasm-churn-diagnose
+```
+
+`summarize` remains a compact progress and outcome view. Use the separate
+read-only `report` command for the v7 wave, per-context, per-CPU, interval, and
+focused A/B/A statistics:
+
+```sh
+node fault-affinity.mjs report \
+  --bundle-dir diagnostics/wasm-campaign \
+  --recipe wasm-churn-diagnose
+```
+
 ## Keep the interpretation narrow
 
-The summary is a read-only view, not a persisted evidence format or the legacy
-suite's final report. It does not add telemetry, debugger capture, privacy
-review, confidence intervals, or cross-phase causal conclusions. Share the
-complete validated bundle alongside any copied summary.
+The summary is a read-only view, not a persisted evidence format. It does not
+add telemetry, debugger capture, privacy review, confidence intervals, or
+cross-phase causal conclusions. A completed v7 campaign separately publishes
+a derived, manifest-bound report, but the validated bundle remains the
+evidence authority. Share the complete bundle alongside any copied summary or
+report.

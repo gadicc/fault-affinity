@@ -160,6 +160,7 @@ function waitForChild(child, signal) {
 
 export async function runPinnedWaveProcess({
   selection,
+  auxiliarySelection,
   bundleDir,
   controllerCpu,
   tasksetPath,
@@ -182,6 +183,7 @@ export async function runPinnedWaveProcess({
     OWNER_PATH,
     bundleDir,
     ...selectionArguments(selection),
+    ...(auxiliarySelection === undefined ? [] : selectionArguments(auxiliarySelection)),
   ], {
     cwd: "/",
     env: {},

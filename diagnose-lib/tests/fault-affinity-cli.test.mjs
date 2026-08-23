@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -181,7 +183,62 @@ function pinnedPlan(directory, overrides = {}) {
   return filename;
 }
 
-function capture(cwd) {
+function campaignPlan(directory, overrides = {}) {
+  const [controller, active] = allowedCpus(2);
+  const filename = path.join(directory, "campaign-plan.json");
+  const value = {
+    version: 1,
+    baseline: { children: 1, waves: 1 },
+    groups: {
+      cpuUniverse: String(active),
+      contexts: [{
+        id: "active", kind: "subset", cpus: String(active), children: 1,
+      }],
+      rounds: 1,
+      seed: 7,
+    },
+    pinnedConcurrent: {
+      contexts: [{
+        id: "active",
+        kind: "subset",
+        cpus: String(active),
+        cluster: `l2:${active}`,
+        controllerCpu: controller,
+      }],
+      rounds: 1,
+      seed: 11,
+    },
+    exact: { cpus: String(active), rounds: 1, seed: 13 },
+    controlledLoad: {
+      targetCpu: active,
+      workerCpus: String(controller),
+      attemptsPerLeg: 1,
+      warmupMs: 0,
+      recoveryMs: 0,
+    },
+    ...overrides,
+  };
+  writeFileSync(filename, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+  return filename;
+}
+
+function topologyFixture(directory) {
+  const cpus = allowedCpus(2);
+  const cpuRoot = path.join(directory, "sysfs", "system", "cpu");
+  const deviceRoot = path.join(directory, "sysfs", "devices");
+  mkdirSync(cpuRoot, { recursive: true });
+  mkdirSync(deviceRoot, { recursive: true });
+  writeFileSync(path.join(cpuRoot, "online"), `${cpus.join(",")}\n`);
+  for (const [index, cpu] of cpus.entries()) {
+    const topology = path.join(cpuRoot, `cpu${cpu}`, "topology");
+    mkdirSync(topology, { recursive: true });
+    writeFileSync(path.join(topology, "physical_package_id"), "0\n");
+    writeFileSync(path.join(topology, "core_id"), `${index}\n`);
+  }
+  return { cpuRoot, deviceRoot, allowedCpuSpec: cpus.join(","), cpus };
+}
+
+function capture(cwd, extraIo = {}) {
   let stdout = "";
   let stderr = "";
   return {
@@ -189,6 +246,7 @@ function capture(cwd) {
       cwd,
       stdout: (value) => { stdout += value; },
       stderr: (value) => { stderr += value; },
+      ...extraIo,
     },
     stdout: () => stdout,
     stderr: () => stderr,
@@ -352,6 +410,33 @@ test("argument parsing keeps live selection and confirmation explicit", () => {
     "controlled-load", "--recipe", "wasm-churn-aba",
     "--out-dir", "bundle", "--dry-run",
   ]), /requires --target-cpu N and --load-cpus LIST/);
+  assert.deepEqual(parseFaultAffinityArgs([
+    "diagnose", "--out-dir", "bundle", "--dry-run",
+  ]), {
+    command: "diagnose",
+    mode: "dry-run",
+    recipe: "wasm-churn-diagnose",
+    profile: "quick",
+    seed: 17,
+    outDir: "bundle",
+    tasksetPath: "/usr/bin/taskset",
+  });
+  assert.deepEqual(parseFaultAffinityArgs([
+    "diagnose", "--resume", "bundle", "--yes",
+  ]), {
+    command: "diagnose",
+    mode: "resume",
+    recipe: "wasm-churn-diagnose",
+    resumeDir: "bundle",
+  });
+  assert.throws(() => parseFaultAffinityArgs([
+    "diagnose", "--recipe", "wasm-churn-diagnose", "--condition-workload", "yes-load",
+    "--out-dir", "bundle", "--dry-run",
+  ]), /cannot be combined/);
+  assert.throws(() => parseFaultAffinityArgs([
+    "diagnose", "--plan-file", "plan.json", "--quick",
+    "--out-dir", "bundle", "--dry-run",
+  ]), /cannot be combined with automatic topology/);
 });
 
 test("listing and inspection describe built-ins without creating files", async () => {
@@ -365,6 +450,7 @@ test("listing and inspection describe built-ins without creating files", async (
 
   const recipes = capture(directory);
   assert.equal(await runFaultAffinityCli(["recipes"], recipes.io), 0);
+  assert.match(recipes.stdout(), /wasm-churn-diagnose/);
   assert.match(recipes.stdout(), /wasm-churn-aba/);
   assert.match(recipes.stdout(), /measured: wasm-churn; condition: yes-load/);
   assert.equal(recipes.stderr(), "");
@@ -379,6 +465,27 @@ test("listing and inspection describe built-ins without creating files", async (
   assert.equal(summary.capabilities.baseline, false);
   assert.equal(summary.capabilities.isolated, true);
   assert.deepEqual(readdirSync(directory), []);
+});
+
+test("the default diagnose dry run discovers and displays a complete quick campaign", async () => {
+  const directory = temporaryDirectory();
+  const topology = topologyFixture(directory);
+  const output = path.join(directory, "planned-campaign");
+  const captured = capture(directory, topology);
+  const rc = await runFaultAffinityCli([
+    "diagnose", "--out-dir", path.basename(output), "--dry-run",
+  ], captured.io);
+
+  assert.equal(rc, 0, captured.stderr());
+  assert.equal(existsSync(output), false);
+  assert.match(captured.stdout(), /measured workload:\nwasm-churn-suite:/);
+  assert.match(captured.stdout(), /condition workload:\nyes-load:/);
+  assert.match(captured.stdout(), /profile: quick/);
+  assert.match(captured.stdout(), /topology source: uniform/);
+  assert.match(captured.stdout(), /baseline: 2 child\(ren\) x 3 wave\(s\)/);
+  assert.match(captured.stdout(), /pinned-concurrent: 2 context\(s\)/);
+  assert.match(captured.stdout(), /3 attempt\(s\) per A1\/B\/A2 leg/);
+  assert.match(captured.stdout(), /no workload executed and no bundle created/);
 });
 
 test("a dry run validates baseline and bound exact schedules without creating output", async () => {
@@ -570,14 +677,14 @@ test("the public exact command creates, completes, and resumes its own schema-3 
     "summarize", "--bundle-dir", path.basename(bundleDir), ...selection,
     "--condition-workload-file", path.basename(condition),
   ], extraCondition.io), 2);
-  assert.match(extraCondition.stderr(), /applies only to schema-3 manifest-v5 bundles/);
+  assert.match(extraCondition.stderr(), /applies only to schema-3 manifest-v5 or v7 bundles/);
 
   const extraExactCondition = capture(directory);
   assert.equal(await runFaultAffinityCli([
     "exact", "--resume", path.basename(bundleDir), ...selection,
     "--condition-workload-file", path.basename(condition), "--yes",
   ], extraExactCondition.io), 2);
-  assert.match(extraExactCondition.stderr(), /applies only to schema-3 manifest-v5 bundles/);
+  assert.match(extraExactCondition.stderr(), /applies only to schema-3 manifest-v5 or v7 bundles/);
 });
 
 test("the public baseline command completes schema-3 v2 and exact resumes that bundle", {
@@ -716,6 +823,77 @@ test("the public pinned command completes v4 under its scheduled controller", {
   assert.equal(bundle.groups.progress.complete, true);
   assert.equal(bundle.pinnedConcurrent.progress.complete, true);
   assert.equal(bundle.exactCpu.progress.complete, true);
+});
+
+test("the public diagnose command completes and resumes every v7 campaign phase", {
+  timeout: 30_000,
+}, async () => {
+  const directory = temporaryDirectory();
+  const measuredFile = customWorkload(directory);
+  const conditionFile = conditionWorkload(directory);
+  const planFile = campaignPlan(directory);
+  const bundleDir = path.join(directory, "campaign-bundle");
+  const selection = [
+    "--workload-file", path.basename(measuredFile),
+    "--condition-workload-file", path.basename(conditionFile),
+  ];
+  const first = capture(directory);
+  const rc = await runFaultAffinityCli([
+    "diagnose", ...selection,
+    "--plan-file", path.basename(planFile),
+    "--out-dir", path.basename(bundleDir),
+    "--yes",
+  ], first.io);
+  assert.equal(rc, 0, first.stderr());
+  assert.match(first.stdout(), /campaign phase: baseline/);
+  assert.match(first.stdout(), /campaign phase: CPU groups/);
+  assert.match(first.stdout(), /campaign phase: pinned concurrent/);
+  assert.match(first.stdout(), /campaign phase: exact CPUs/);
+  assert.match(first.stdout(), /campaign phase: controlled load/);
+  assert.match(first.stdout(), /campaign complete/);
+  assert.match(first.stdout(), /final reports:/);
+  assert.equal(existsSync(path.join(bundleDir, "report.md")), true);
+  assert.equal(existsSync(path.join(bundleDir, "report.json")), true);
+  assert.equal(existsSync(path.join(bundleDir, "report.complete.json")), true);
+  const storedReport = JSON.parse(readFileSync(path.join(bundleDir, "report.json"), "utf8"));
+  assert.equal(storedReport.complete, true);
+  assert.equal(storedReport.phases.exactCpu.cpus.length, 1);
+
+  const resolved = resolveCustomWorkloadFile(measuredFile).resolved;
+  const auxiliary = resolveCustomWorkloadFile(conditionFile).resolved;
+  const bundle = await readSchema3Bundle({ resolved, auxiliary, bundleDir });
+  assert.equal(bundle.manifest.version, 7);
+  for (const phase of [
+    "baseline", "groups", "pinnedConcurrent", "exactCpu", "controlledLoad",
+  ]) {
+    assert.equal(bundle[phase].progress.complete, true, phase);
+  }
+
+  const resumed = capture(directory);
+  assert.equal(await runFaultAffinityCli([
+    "diagnose", "--resume", path.basename(bundleDir), ...selection, "--yes",
+  ], resumed.io), 0, resumed.stderr());
+  assert.match(resumed.stdout(), /resuming diagnose campaign/);
+  assert.match(resumed.stdout(), /campaign complete/);
+
+  const summarized = capture(directory);
+  assert.equal(await runFaultAffinityCli([
+    "summarize", "--bundle-dir", path.basename(bundleDir), ...selection, "--json",
+  ], summarized.io), 0, summarized.stderr());
+  const summary = JSON.parse(summarized.stdout());
+  assert.equal(summary.bundle.manifestVersion, 7);
+  assert.equal(summary.phases.baseline.status, "complete");
+  assert.equal(summary.phases.groups.status, "complete");
+  assert.equal(summary.phases.pinnedConcurrent.status, "complete");
+  assert.equal(summary.phases.exactCpu.status, "complete");
+  assert.equal(summary.phases.controlledLoad.status, "complete");
+
+  const reportOutput = capture(directory);
+  assert.equal(await runFaultAffinityCli([
+    "report", "--bundle-dir", path.basename(bundleDir), ...selection, "--json",
+  ], reportOutput.io), 0, reportOutput.stderr());
+  const derivedReport = JSON.parse(reportOutput.stdout());
+  assert.deepEqual(derivedReport, storedReport);
 });
 
 test("the public controlled-load command completes v5 and exact resumes its sibling phase", {

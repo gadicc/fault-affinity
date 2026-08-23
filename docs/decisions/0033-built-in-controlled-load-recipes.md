@@ -55,3 +55,7 @@ time and no schema version changes.
 - The recipe catalog is a foundation for a later generic diagnose campaign;
   it does not yet combine topology screening, loaded comparisons, statistics,
   and a final report.
+
+[ADR 0035](0035-public-diagnose-campaign-and-report.md) later fulfills that
+campaign boundary through separate `wasm-churn-diagnose` and
+`node-pglite-diagnose` recipes without changing this v5 decision.

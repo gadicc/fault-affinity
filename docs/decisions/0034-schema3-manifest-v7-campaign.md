@@ -39,10 +39,16 @@ condition, schedule, topology context, controller placement, or executable
 identity fails closed before execution. Existing phase owners may advance
 their v7 phase while holding the same bundle-wide exclusive lease.
 
-The read-only schema-3 summary accepts v7 and presents all five phase views,
-but a later campaign layer owns topology discovery, phase ordering, automatic
-resume, and final statistical report construction. Those derived reports do
-not become evidence authorities merely because the bundle is complete.
+The read-only schema-3 summary accepts v7 and presents all five phase views.
+[ADR 0035](0035-public-diagnose-campaign-and-report.md) adds topology discovery,
+phase ordering, automatic resume, and final statistical report construction.
+Those derived reports do not become evidence authorities merely because the
+bundle is complete.
+
+Manifest v7 may contain the derived root files `report.json`, `report.md`, and
+`report.complete.json`. The completion file binds the immutable manifest and
+both report byte streams and is published last. Versions 1 through 6 reject
+these names as foreign root artifacts.
 
 ## Consequences
 

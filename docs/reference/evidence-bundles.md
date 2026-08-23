@@ -177,7 +177,7 @@ Future generic-workload schemas must extend these rules. Existing Node/PGlite bu
 ## Inspect schema-3 bundles without mutation
 
 Schema-3 bundles use their own manifest and phase-store formats rather than the
-legacy layout described above. Inspect versions 1 through 6 with the read-only
+legacy layout described above. Inspect versions 1 through 7 with the read-only
 public command:
 
 ```sh
@@ -187,8 +187,16 @@ node fault-affinity.mjs summarize \
   --json
 ```
 
-Manifest version 5 also requires the matching built-in
+Manifest versions 5 and 7 also require the matching built-in
 `--condition-workload`, custom `--condition-workload-file`, or recipe. The
 command validates the bundle through its
 authoritative reader, writes nothing inside it, and counts only committed typed
 outcomes. See [summarize a schema-3 bundle](../guides/schema3-summaries.md).
+
+A completed manifest-v7 campaign additionally publishes `report.json`,
+`report.md`, then `report.complete.json` in that order. The final marker binds
+the immutable bundle manifest and both derived report byte streams. These
+files are accepted only for v7; older manifest readers reject them as foreign
+root artifacts. The report is reproducible from validated phase evidence and
+does not replace it as the authority. See
+[run a generic diagnostic campaign](../guides/generic-diagnose-campaign.md).

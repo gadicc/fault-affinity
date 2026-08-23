@@ -98,6 +98,9 @@ export const SCHEMA3_BUNDLE_MANIFEST_V7_VERSION = 7;
 export const SCHEMA3_RUN_SCHEMA_VERSION = 3;
 export const SCHEMA3_BUNDLE_FILE = "fault-affinity-bundle.json";
 export const SCHEMA3_BUNDLE_FILE_MAX_BYTES = 8 * 1024 * 1024;
+export const SCHEMA3_CAMPAIGN_REPORT_JSON_FILE = "report.json";
+export const SCHEMA3_CAMPAIGN_REPORT_MARKDOWN_FILE = "report.md";
+export const SCHEMA3_CAMPAIGN_REPORT_COMPLETION_FILE = "report.complete.json";
 export const SCHEMA3_BASELINE_STATE_DIRECTORY = "state/baseline";
 export const SCHEMA3_GROUP_STATE_DIRECTORY = "state/groups";
 export const SCHEMA3_PINNED_CONCURRENT_STATE_DIRECTORY = "state/pinned-concurrent";
@@ -792,12 +795,19 @@ async function listRoot(adapter) {
     }
     throw error;
   }
-  requireCondition(Array.isArray(names) && names.length <= 2 &&
+  const allowed = new Set([
+    SCHEMA3_BUNDLE_FILE,
+    "state",
+    SCHEMA3_CAMPAIGN_REPORT_JSON_FILE,
+    SCHEMA3_CAMPAIGN_REPORT_MARKDOWN_FILE,
+    SCHEMA3_CAMPAIGN_REPORT_COMPLETION_FILE,
+  ]);
+  requireCondition(Array.isArray(names) && names.length <= allowed.size &&
     names.every((name) => typeof name === "string"),
   "schema-3 bundle root inventory is invalid or oversized");
   const seen = new Set(names);
   requireCondition(seen.size === names.length &&
-    names.every((name) => name === SCHEMA3_BUNDLE_FILE || name === "state"),
+    names.every((name) => allowed.has(name)),
   "schema-3 bundle root contains an unknown entry");
   return seen;
 }
@@ -889,6 +899,14 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
   requireCondition(names.has(SCHEMA3_BUNDLE_FILE), "schema-3 bundle manifest is missing");
   requireCondition(names.has("state"), "schema-3 bundle state directory is missing");
   const manifest = await readManifest(resolved, auxiliary, adapter);
+  const derivedReportNames = [
+    SCHEMA3_CAMPAIGN_REPORT_JSON_FILE,
+    SCHEMA3_CAMPAIGN_REPORT_MARKDOWN_FILE,
+    SCHEMA3_CAMPAIGN_REPORT_COMPLETION_FILE,
+  ].filter((name) => names.has(name));
+  requireCondition(manifest.version === SCHEMA3_BUNDLE_MANIFEST_V7_VERSION ||
+    derivedReportNames.length === 0,
+  "derived campaign reports are allowed only in schema-3 manifest-v7 bundles");
   const stateRoot = validatePrivateDirectory(path.join(root, "state"),
     "schema-3 bundle state directory");
   await validateStateRootInventory(stateRoot, manifest);

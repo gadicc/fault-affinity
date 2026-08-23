@@ -9,13 +9,14 @@ This index separates instructions for running the current tooling from the resul
 
 ## Run the current tools
 
+- [Run a generic diagnostic campaign](guides/generic-diagnose-campaign.md): automatic topology planning, built-in reduced and historical recipes, schema-3 v7 resume, every-CPU localization, focused load, and final statistical reports
 - [Run a generic exact-CPU workload](guides/generic-exact-cpu.md): built-in and custom workload selection, dry runs, live execution, and schema-3 resume
 - [Run generic baseline waves](guides/generic-baseline.md): correlated-wave planning, schema-3 v2 creation, resume, and its bound exact phase
 - [Run generic CPU-group waves](guides/generic-cpu-groups.md): explicit topology plans, schema-3 v3 creation, whole-wave resume, and sibling phases
 - [Run generic pinned-concurrent waves](guides/generic-pinned-concurrent.md): explicit controller/active plans, schema-3 v4 creation, controller placement, and sibling phases
 - [Run a generic controlled-load comparison](guides/generic-controlled-load.md): the built-in `wasm-churn-aba` recipe, generic measured and condition workloads, complete-only schema-3 v5 A1/B/A2 resume, and its sibling exact phase
 - [Capture a debugger phase](guides/debugger-phase.md): schema-3 v6 debugger bundles, dry runs, capture-cap completion, resume, and per-run summaries
-- [Summarize a schema-3 bundle](guides/schema3-summaries.md): read-only text and JSON views of validated v1-v6 progress, outcomes, contexts, legs, runs, and CPUs
+- [Summarize a schema-3 bundle](guides/schema3-summaries.md): read-only text and JSON views of validated v1-v7 progress, outcomes, contexts, legs, runs, and CPUs
 - [Run the diagnostic suite](guides/run-diagnostics.md): prerequisites, presets, exact-CPU protocols, optional privileged steps, and exploratory follow-ups
 - [Run controlled-load experiments](guides/controlled-load-experiments.md): load-state A/B/A, GDB capture, Node A/B/A, and Node/warmup matrix modes
 - [Understand evidence bundles](reference/evidence-bundles.md): output layout, integrity, privacy, resume, redo, and phase validation

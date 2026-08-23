@@ -1,8 +1,9 @@
 # Architecture decisions
 
-These architecture decision records (ADRs) define the accepted direction for
-Fault Affinity before the public runtime is generalized. They describe required
-behavior and compatibility boundaries, not current runtime capabilities.
+These architecture decision records (ADRs) define the accepted evolution of
+Fault Affinity. Earlier records preserve the decision context at the time;
+later records identify the public capability that fulfilled a deferred
+boundary.
 
 | Decision | Status | Summary |
 | --- | --- | --- |
@@ -40,3 +41,4 @@ behavior and compatibility boundaries, not current runtime capabilities.
 | [ADR 0032](0032-public-debugger-command.md) | Accepted | Publish the debugger command for v6 bundles and the two debugger-capable built-in profiles. |
 | [ADR 0033](0033-built-in-controlled-load-recipes.md) | Accepted | Make the reduced A1/B/A2 path repeatable through the `yes-load` built-in and `wasm-churn-aba` recipe without changing manifest v5. |
 | [ADR 0034](0034-schema3-manifest-v7-campaign.md) | Accepted | Combine topology screening, exact-CPU localization, and focused controlled load in one immutable schema-3 v7 campaign. |
+| [ADR 0035](0035-public-diagnose-campaign-and-report.md) | Accepted | Publish automatic and explicit v7 diagnose campaigns with built-in recipes, complete resume, and bound statistical reports. |

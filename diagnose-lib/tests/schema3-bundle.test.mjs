@@ -942,6 +942,14 @@ test("bundle readers fail closed on foreign root/state entries and live commit r
   await assert.rejects(readSchema3Bundle({ resolved, bundleDir: foreignState }),
     /state directory contains an unknown entry/);
 
+  const foreignDerivedReport = bundleDirectory();
+  await initializeSchema3Bundle({ resolved, manifest, bundleDir: foreignDerivedReport });
+  writeFileSync(path.join(foreignDerivedReport, "report.md"), "unexpected\n", {
+    mode: 0o600,
+  });
+  await assert.rejects(readSchema3Bundle({ resolved, bundleDir: foreignDerivedReport }),
+    /allowed only in schema-3 manifest-v7 bundles/);
+
   const v2Resolved = baselineWorkload();
   const v2Manifest = bundleManifestV2(v2Resolved);
   const missingV2State = bundleDirectory();

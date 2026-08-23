@@ -81,11 +81,13 @@ For a version-2 bundle created by `fault-affinity baseline`, the exact schedule
 was fixed at bundle creation. `exact --resume` uses that stored schedule and
 shares the same lease with baseline operations.
 
-Version-5 controlled-load bundles also bind an auxiliary workload identity.
-Their exact resume must include the same built-in `--condition-workload`,
-custom `--condition-workload-file`, or `--recipe` selection; this validates
-the manifest but does not start condition workers. See the
-[generic controlled-load guide](generic-controlled-load.md).
+Version-5 controlled-load and version-7 campaign bundles also bind an
+auxiliary workload identity. Their exact resume must include the same built-in
+`--condition-workload`, custom `--condition-workload-file`, or applicable
+`--recipe` selection; this validates the manifest but does not start condition
+workers. A v7 campaign normally advances this phase through `diagnose`. See the
+[generic controlled-load guide](generic-controlled-load.md) and
+[generic diagnose campaign guide](generic-diagnose-campaign.md).
 
 `SIGINT` and `SIGTERM` cancel the active attempt, retain ownership through
 bounded cleanup, and leave the interrupted schedule slot uncommitted so it can

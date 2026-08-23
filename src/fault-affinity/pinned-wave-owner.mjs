@@ -7,16 +7,24 @@ import { resolveWorkloadSelection } from "../../workloads/catalog.mjs";
 const OWNER_RECORD_VERSION = 1;
 
 function parseArguments(argv) {
-  if (!Array.isArray(argv) || argv.length !== 3 ||
+  if (!Array.isArray(argv) || ![3, 5].includes(argv.length) ||
       argv.some((value) => typeof value !== "string" || value.length === 0 ||
         value.includes("\0"))) {
-    throw new TypeError("pinned wave owner requires bundle, selection type, and selection value");
+    throw new TypeError("pinned wave owner requires a bundle and one or two workload selections");
   }
-  const [bundleDir, selectionType, selectionValue] = argv;
-  if (selectionType !== "built-in" && selectionType !== "custom-file") {
+  const [bundleDir, selectionType, selectionValue, auxiliaryType, auxiliaryValue] = argv;
+  if ((selectionType !== "built-in" && selectionType !== "custom-file") ||
+      (auxiliaryType !== undefined &&
+        auxiliaryType !== "built-in" && auxiliaryType !== "custom-file")) {
     throw new TypeError("pinned wave owner selection type is invalid");
   }
-  return { bundleDir, selectionType, selectionValue };
+  return { bundleDir, selectionType, selectionValue, auxiliaryType, auxiliaryValue };
+}
+
+function resolveSelection(type, value) {
+  return resolveWorkloadSelection(type === "built-in"
+    ? { workload: value }
+    : { workloadFile: value });
 }
 
 function signalExitCode(signal) {
@@ -36,11 +44,15 @@ export async function runPinnedWaveOwner(argv, io = {}) {
   for (const [signal, handler] of handlers) signalSource.once(signal, handler);
   try {
     const parsed = parseArguments(argv);
-    const selection = resolveWorkloadSelection(parsed.selectionType === "built-in"
-      ? { workload: parsed.selectionValue }
-      : { workloadFile: parsed.selectionValue });
+    const selection = resolveSelection(parsed.selectionType, parsed.selectionValue);
+    const auxiliarySelection = parsed.auxiliaryType === undefined
+      ? undefined
+      : resolveSelection(parsed.auxiliaryType, parsed.auxiliaryValue);
     const execution = await runOneSchema3PinnedConcurrentWave({
       resolved: selection.resolved,
+      ...(auxiliarySelection === undefined ? {} : {
+        auxiliary: auxiliarySelection.resolved,
+      }),
       bundleDir: parsed.bundleDir,
       attemptOptions: { signal: controller.signal },
     });

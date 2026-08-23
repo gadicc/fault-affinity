@@ -1,11 +1,10 @@
 # Understand the Fault Affinity direction
 
-This page separates the implemented Fault Affinity foundation from the
-remaining migration work. **Fault Affinity** is now the package and public
-command identity. Exact-CPU execution was the first generic public path;
-correlated baseline waves, explicit CPU-group contexts, and controller-aware
-pinned-concurrent contexts are now public through schema-3 manifest versions 2,
-3, and 4.
+This page separates the implemented Fault Affinity harness from its remaining
+optional extensions. **Fault Affinity** is now the package and public command
+identity. The generic path spans exact-CPU, baseline, CPU-group,
+pinned-concurrent, controlled-load, debugger, and combined diagnostic campaign
+workflows through schema-3 manifest versions 1 through 7.
 
 ## Define the intended scope
 
@@ -41,9 +40,12 @@ on the affected machine.
 
 The native harness remains an advanced control. Its pure-execution modes did not reproduce the userspace fault in the documented runs, while `churn-mem` produced kernel oopses and a wedged process. That risk makes it unsuitable as a default workload.
 
-No built-in runs implicitly. Fresh and resumed live invocations require an
-explicit workload choice, and inspection and planning display the declared
-resource or disruption risk without launching it.
+No command runs a built-in without the operator entering a live command with
+`--yes`. Lower-level commands require an explicit workload choice. The
+high-level `diagnose` command deliberately defaults to the recommended
+`wasm-churn-diagnose` recipe so a complete dry run needs only an output path;
+it prints the selected identities, risks, topology, and schedules before any
+live confirmation.
 
 ## Bind public commands to a workload contract
 
@@ -91,9 +93,11 @@ The intended implementation sequence is:
 5. Resolve canonical workload identities and bind them to evidence.
 6. Migrate exact-CPU paths internally while checking PGlite compatibility.
 7. Add the internal schema-3 bundle owner, then migrate baseline and group screening.
-8. Migrate controlled-load, GDB, and frequency protocols.
+8. Migrate controlled-load and GDB; keep privileged frequency recovery on its
+   compatibility path until a generic contract exists.
 9. Extract built-in workloads and reorganize the source tree.
-10. Adopt the Fault Affinity package, command, and repository identity.
+10. Adopt the Fault Affinity package and command identity without coupling it
+    to a repository-host rename.
 
 The documentation, safety-net, workload-spec, bounded attempt-runner,
 versioned attempt-record, exact-CPU phase-envelope, durable phase-store,
@@ -107,7 +111,10 @@ variant that binds measured and auxiliary workload identities, exact-CPU state,
 and one complete A1/B/A2 store. Version 6 is a separate debugger-focused
 exact-CPU variant that binds one isolated-plus-gdb workload, the exact-CPU
 phase, and the debugger phase with `state/exact-cpu` and `state/debugger`
-ownership; controlled-load composition is deferred to a later version. The
+ownership; controlled-load composition is not added to that variant. Version 7
+combines baseline, groups, pinned-concurrent, exact CPU, and controlled load
+for one measured and one condition workload without changing versions 1
+through 6. The
 public `debugger` command drives fresh, dry-run, and resume flows for v6
 bundles with explicit selection, explicit live confirmation, allowed-CPU
 validation, bounded run/capture settings, lease-busy exit 75, and typed
@@ -136,9 +143,13 @@ under each scheduled controller CPU. The controlled-load command binds
 separate measured and built-in or trusted custom condition workloads and
 publishes no partial session. Phase commands can then advance their matching
 prefixes in that same bundle. A read-only `summarize` command validates
-versions 1 through 6 and renders committed outcomes by phase, context, leg,
-and CPU without changing the bundle. Trusted custom JSON workloads declare
-their own capabilities.
+versions 1 through 7 and renders committed outcomes by phase, context, leg,
+run, and CPU without changing the bundle. The public `diagnose` command derives
+a reviewed Linux topology plan, or accepts a bounded explicit plan, then
+advances all five v7 phases in order. Completed campaigns publish bound JSON
+and Markdown reports with separate wave, child, per-context, per-CPU, and
+A/B/A denominators. The read-only `report` command rederives and validates that
+view. Trusted custom JSON workloads declare their own capabilities.
 
 The published `wasm-churn` and `node-pglite` IDs retain their exact-only
 workload identities. Separate `wasm-churn-suite` and `node-pglite-suite`
@@ -160,26 +171,37 @@ applicable. Historical Node
 A/B/A and Node-by-warmup modes remain multi-workload experiments outside the
 current schema.
 
-## Build the generic diagnose campaign next
+## Use the generic diagnose campaign now
 
-The next major milestone is a generic diagnose-style campaign that binds one
-measured recipe and optional load condition, runs reviewed baseline, group,
-pinned-concurrent, exact-CPU, and focused controlled-load phases, and derives
-one final report with per-phase and per-CPU rates. Denominators and correlated
-wave or session units must remain separate; a report must not pool them merely
-because they share a workload.
+The high-level campaign milestone is implemented. The default
+`wasm-churn-diagnose` recipe combines the reduced multi-phase workload and the
+verified `yes-load` condition. Automatic planning intersects online CPUs with
+the invoking allowance, preserves Linux hybrid classes and efficient-core
+clusters when exposed, checks controller placement, covers every usable CPU in
+the exact phase, and focuses A/B/A load on one deterministic or explicitly
+selected target. The retained `node-pglite-diagnose` recipe repeats the same
+generic protocol with the historical heavyweight workload.
 
-Manifest version 4 currently owns baseline, groups, pinned-concurrent, and
-exact state, while version 5 owns controlled-load and exact state. A campaign
-therefore needs either a new combined manifest version or an outer manifest
-that binds multiple complete component bundles. It must also define telemetry,
-statistics, interruption/resume, privacy review, and final-report completion
-semantics before becoming a public command. It should reuse built-in recipes
-instead of reintroducing PGlite-specific launch assumptions.
+Manifest v7 owns the five phase stores under one immutable experiment identity.
+Resume validates both workload digests and every phase manifest before
+continuing. Final reports keep correlated waves, descriptive child outcomes,
+exact attempts, and the complete A/B/A session separate; other workload
+failures remain outside the pass-plus-target rate denominator.
 
-Until that decision lands, expose additional generic phases only where their
-capability, provenance, and compatibility contracts are complete. The
-schema-3 summary deliberately stops short of the legacy suite's telemetry,
-campaign statistics, privacy, and final-report behavior. Legacy
-schema-1/schema-2 interpretation and the privileged recovery namespace remain
-unchanged throughout.
+See [run a generic diagnostic campaign](guides/generic-diagnose-campaign.md)
+for the default dry run, profiles, topology overrides, resume, and report
+interpretation.
+
+## Keep remaining extensions explicit
+
+The v7 topology phases are intentionally condition-free; only the focused B
+leg runs the auxiliary load. A loaded group or every-CPU sweep needs a new
+bound protocol rather than an unrecorded switch. Generic telemetry and
+frequency-control collection likewise remain separate work: telemetry needs a
+workload-neutral association contract, while frequency changes remain
+privileged and must preserve the historical recovery guarantees.
+
+The v7 report does not claim to replace the legacy suite's telemetry, debugger
+transcripts, frequency evidence, or privacy-review inventory. Historical
+schema-1/schema-2 interpretation, Node A/B/A and warmup matrices, and the
+privileged recovery namespace remain unchanged.

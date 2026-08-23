@@ -40,6 +40,7 @@ import {
   buildSchema3BundleManifestV4,
   buildSchema3BundleManifestV5,
   buildSchema3BundleManifestV6,
+  buildSchema3BundleManifestV7,
   initializeSchema3Bundle,
   newSchema3BundleGeneration,
   readSchema3Bundle,
@@ -55,6 +56,25 @@ import {
   resolveWorkloadSelection,
 } from "../../workloads/catalog.mjs";
 import { readControlledLoadPlanFile } from "./controlled-load-plan.mjs";
+import { readCampaignPlanFile } from "./campaign-plan.mjs";
+import {
+  buildCampaignReport,
+  renderCampaignReportMarkdown,
+} from "./campaign-report.mjs";
+import {
+  publishCampaignReport,
+  readPublishedCampaignReport,
+} from "./campaign-report-store.mjs";
+import {
+  DEFAULT_CAMPAIGN_RECIPE,
+  listCampaignRecipes,
+  resolveCampaignRecipe,
+} from "./campaign-recipes.mjs";
+import {
+  CAMPAIGN_PROFILES,
+  buildCampaignPlanFromTopology,
+  discoverCampaignTopology,
+} from "./campaign-topology.mjs";
 import {
   buildControlledLoadRecipePlan,
   DEFAULT_CONTROLLED_LOAD_CONDITION,
@@ -79,7 +99,22 @@ const HELP = `Fault Affinity: bounded, resumable workload diagnostics
 Usage:
   fault-affinity workloads [--json]
   fault-affinity recipes [--json]
+  fault-affinity diagnose [--recipe ID] [--profile quick|standard|full] \\
+    [--target-cpu N] [--load-cpus LIST] [--seed N] --out-dir DIR \\
+    (--dry-run | --yes)
+  fault-affinity diagnose \\
+    (--workload ID | --workload-file FILE) \\
+    [--condition-workload ID | --condition-workload-file FILE] \\
+    [--plan-file FILE | [--profile quick|standard|full] \\
+      [--target-cpu N] [--load-cpus LIST] [--seed N]] \\
+    --out-dir DIR (--dry-run | --yes)
+  fault-affinity diagnose --resume DIR [--recipe ID | \\
+    (--workload ID | --workload-file FILE) \\
+      [--condition-workload ID | --condition-workload-file FILE]] --yes
   fault-affinity inspect (--workload ID | --workload-file FILE) [--json]
+  fault-affinity report --bundle-dir DIR \\
+    ((--workload ID | --workload-file FILE) \\
+      [--condition-workload ID | --condition-workload-file FILE] | --recipe ID) [--json]
   fault-affinity summarize --bundle-dir DIR \\
     ((--workload ID | --workload-file FILE) \\
       [--condition-workload ID | --condition-workload-file FILE] | --recipe ID) [--json]
@@ -112,6 +147,11 @@ Usage:
     [--condition-workload ID | --condition-workload-file FILE] --yes
   fault-affinity exact --resume DIR --recipe ID --yes
 
+The diagnose command creates combined schema-3 v7 campaigns. Its default
+wasm-churn-diagnose recipe uses the multi-phase WebAssembly churn workload,
+the yes-load condition, automatic reviewed host-topology planning, and the
+quick profile. Use --dry-run to inspect the complete plan before --yes.
+
 The baseline command creates schema-3 v2 bundles. The groups command creates
 v3 bundles from a bounded plan file. The pinned command creates v4 bundles that
 also bind controller-aware pinned-concurrent schedules. The controlled-load
@@ -121,7 +161,8 @@ variant with one pinned CPU and bounded run and capture counts. Phase commands
 can advance their matching state in later compatible bundle versions. The
 exact command also creates exact-only v1 bundles. Listing, inspection,
 summaries, and dry runs never execute a workload or create an evidence bundle.
-Every live run requires explicit workload selection and --yes.
+Every live run requires --yes; commands other than diagnose also require an
+explicit workload selection.
 
 The wasm-churn-aba recipe explicitly selects the recommended wasm-churn
 measured workload and yes-load condition. Target and load CPUs remain required
@@ -256,7 +297,7 @@ export function parseFaultAffinityArgs(argv) {
     if (!options.help) selectionFrom(options);
     return Object.freeze({ command, ...options });
   }
-  if (command === "summarize") {
+  if (command === "summarize" || command === "report") {
     const options = parseOptions(rest, new Map([
       ["--bundle-dir", "bundleDir"],
       ["--workload", "workload"],
@@ -268,7 +309,7 @@ export function parseFaultAffinityArgs(argv) {
       ["--json", "json"], ["--help", "help"], ["-h", "help"],
     ]));
     if (options.help) return Object.freeze({ command, help: true });
-    if (options.bundleDir === undefined) fail("summarize requires --bundle-dir DIR");
+    if (options.bundleDir === undefined) fail(`${command} requires --bundle-dir DIR`);
     const selection = selectionOrRecipeFrom(options);
     if (options.recipe !== undefined &&
         (options.conditionWorkload !== undefined || options.conditionWorkloadFile !== undefined)) {
@@ -280,6 +321,93 @@ export function parseFaultAffinityArgs(argv) {
       bundleDir: options.bundleDir,
       ...conditionFrom(options),
       ...(options.json === undefined ? {} : { json: true }),
+    });
+  }
+  if (command === "diagnose") {
+    const options = parseOptions(rest, new Map([
+      ["--workload", "workload"],
+      ["--workload-file", "workloadFile"],
+      ["--recipe", "recipe"],
+      ["--condition-workload", "conditionWorkload"],
+      ["--condition-workload-file", "conditionWorkloadFile"],
+      ["--profile", "profile"],
+      ["--plan-file", "planFile"],
+      ["--target-cpu", "targetCpuText"],
+      ["--load-cpus", "loadCpuSpec"],
+      ["--seed", "seedText"],
+      ["--out-dir", "outDir"],
+      ["--resume", "resumeDir"],
+      ["--taskset", "tasksetPath"],
+    ]), new Map([
+      ["--quick", "quick"], ["--standard", "standard"], ["--full", "full"],
+      ["--dry-run", "dryRun"], ["--yes", "yes"],
+      ["--help", "help"], ["-h", "help"],
+    ]));
+    if (options.help) return Object.freeze({ command, help: true });
+    const explicitSelections = Number(options.workload !== undefined) +
+      Number(options.workloadFile !== undefined);
+    if (explicitSelections > 1 || (explicitSelections === 1 && options.recipe !== undefined)) {
+      fail("diagnose accepts one recipe or one explicit measured workload");
+    }
+    const recipe = explicitSelections === 0
+      ? (options.recipe ?? DEFAULT_CAMPAIGN_RECIPE)
+      : undefined;
+    if (recipe !== undefined &&
+        (options.conditionWorkload !== undefined || options.conditionWorkloadFile !== undefined)) {
+      fail("a diagnose recipe cannot be combined with an explicit condition workload");
+    }
+    const selection = recipe === undefined ? selectionFrom(options) : { recipe };
+    const profileFlags = ["quick", "standard", "full"].filter((key) => options[key]);
+    if (profileFlags.length > 1 || (options.profile !== undefined && profileFlags.length > 0)) {
+      fail("choose at most one --profile, --quick, --standard, or --full");
+    }
+    const explicitProfile = options.profile ?? profileFlags[0];
+    if (explicitProfile !== undefined && CAMPAIGN_PROFILES[explicitProfile] === undefined) {
+      fail("--profile must be quick, standard, or full");
+    }
+    if (options.resumeDir !== undefined) {
+      const fresh = [
+        "profile", "planFile", "targetCpuText", "loadCpuSpec", "seedText", "outDir",
+        "tasksetPath", "quick", "standard", "full",
+      ].filter((key) => options[key] !== undefined);
+      if (fresh.length > 0) fail("--resume cannot be combined with fresh diagnose options");
+      if (!options.yes || options.dryRun) fail("a diagnose resume requires --yes");
+      return Object.freeze({
+        command,
+        mode: "resume",
+        ...selection,
+        ...conditionFrom(options),
+        resumeDir: options.resumeDir,
+      });
+    }
+    if (options.outDir === undefined) fail("a fresh diagnose run requires --out-dir DIR");
+    if (Boolean(options.dryRun) === Boolean(options.yes)) {
+      fail("choose exactly one --dry-run or --yes for a fresh diagnose run");
+    }
+    if (options.planFile !== undefined && [
+      explicitProfile, options.targetCpuText, options.loadCpuSpec, options.seedText,
+    ].some((value) => value !== undefined)) {
+      fail("--plan-file cannot be combined with automatic topology plan options");
+    }
+    return Object.freeze({
+      command,
+      mode: options.dryRun ? "dry-run" : "fresh",
+      ...selection,
+      ...conditionFrom(options, {
+        defaultWorkload: recipe === undefined ? DEFAULT_CONTROLLED_LOAD_CONDITION : undefined,
+      }),
+      profile: explicitProfile ?? "quick",
+      ...(options.planFile === undefined ? {} : { planFile: options.planFile }),
+      ...(options.targetCpuText === undefined ? {} : {
+        targetCpu: parseCanonicalInteger(options.targetCpuText, "--target-cpu", 0, MAX_CPU_ID),
+      }),
+      ...(options.loadCpuSpec === undefined ? {} : {
+        loadCpus: parseCanonicalCpuList(options.loadCpuSpec, "--load-cpus"),
+        loadCpuSpec: options.loadCpuSpec,
+      }),
+      seed: parseCanonicalInteger(options.seedText ?? "17", "--seed", 0, MAX_SEED),
+      outDir: options.outDir,
+      tasksetPath: options.tasksetPath ?? DEFAULT_TASKSET_PATH,
     });
   }
   if (command === "debugger") {
@@ -679,13 +807,17 @@ function createPrivateBundleDirectory(value) {
   return realpathSync(requested);
 }
 
-function ensureAllowedCpus(cpus) {
+function ensureAllowedCpus(cpus, allowedCpuSpec) {
   let allowedSpec;
-  try {
-    allowedSpec = readLinuxAllowedCpuList(process.pid, { strict: true });
-  } catch (error) {
-    fail(`could not read the invoking process CPU allowance: ${error?.code ?? error.message}`,
-      "FAULT_AFFINITY_PREFLIGHT_FAILED");
+  if (allowedCpuSpec !== undefined) {
+    allowedSpec = allowedCpuSpec;
+  } else {
+    try {
+      allowedSpec = readLinuxAllowedCpuList(process.pid, { strict: true });
+    } catch (error) {
+      fail(`could not read the invoking process CPU allowance: ${error?.code ?? error.message}`,
+        "FAULT_AFFINITY_PREFLIGHT_FAILED");
+    }
   }
   if (allowedSpec === null) {
     fail("could not read the invoking process CPU allowance",
@@ -742,10 +874,17 @@ function renderWorkload(selection) {
   ].join("\n");
 }
 
+function resolveRecipe(parsed) {
+  if (parsed.recipe === undefined) return undefined;
+  if (parsed.command === "diagnose" ||
+      listCampaignRecipes().some(({ id }) => id === parsed.recipe)) {
+    return resolveCampaignRecipe(parsed.recipe);
+  }
+  return resolveControlledLoadRecipe(parsed.recipe);
+}
+
 function resolveSelection(parsed, cwd) {
-  const recipe = parsed.recipe === undefined
-    ? undefined
-    : resolveControlledLoadRecipe(parsed.recipe);
+  const recipe = resolveRecipe(parsed);
   return resolveWorkloadSelection({
     ...((parsed.workload ?? recipe?.measuredWorkload) === undefined
       ? {}
@@ -757,9 +896,7 @@ function resolveSelection(parsed, cwd) {
 }
 
 function resolveConditionSelection(parsed, cwd) {
-  const recipe = parsed.recipe === undefined
-    ? undefined
-    : resolveControlledLoadRecipe(parsed.recipe);
+  const recipe = resolveRecipe(parsed);
   const workload = parsed.conditionWorkload ?? recipe?.conditionWorkload;
   if (workload === undefined && parsed.conditionWorkloadFile === undefined) return undefined;
   return resolveWorkloadSelection({
@@ -969,6 +1106,54 @@ function buildFreshControlledLoadManifest(
   });
   return buildSchema3BundleManifestV5(resolved, auxiliary, {
     bundleGeneration: dryRun ? ZERO_GENERATION : newSchema3BundleGeneration(),
+    controlledLoadManifest,
+    exactCpuManifest,
+  });
+}
+
+function buildFreshCampaignManifest(resolved, auxiliary, plan, tasksetPath, dryRun) {
+  const phaseGeneration = () => dryRun ? ZERO_GENERATION : generation();
+  const baselineManifest = buildBaselinePhaseManifest(resolved, {
+    generation: phaseGeneration(),
+    childrenPerWave: plan.baseline.childrenPerWave,
+    waves: plan.baseline.waves,
+  });
+  const groupManifest = buildGroupPhaseManifest(resolved, {
+    generation: phaseGeneration(),
+    cpuUniverse: plan.groups.cpuUniverse,
+    contexts: plan.groups.contexts,
+    rounds: plan.groups.rounds,
+    seed: plan.groups.seed,
+    tasksetPath,
+  });
+  const pinnedConcurrentManifest = buildPinnedConcurrentPhaseManifest(resolved, {
+    generation: phaseGeneration(),
+    contexts: plan.pinnedConcurrent.contexts,
+    rounds: plan.pinnedConcurrent.rounds,
+    seed: plan.pinnedConcurrent.seed,
+    tasksetPath,
+  });
+  const exactCpuManifest = buildExactCpuPhaseManifest(resolved, {
+    generation: phaseGeneration(),
+    cpus: plan.exact.cpus,
+    rounds: plan.exact.rounds,
+    seed: plan.exact.seed,
+    tasksetPath,
+  });
+  const controlledLoadManifest = buildControlledLoadSessionManifest(resolved, auxiliary, {
+    generation: phaseGeneration(),
+    attemptsPerLeg: plan.controlledLoad.attemptsPerLeg,
+    targetCpu: plan.controlledLoad.targetCpu,
+    workerCpus: plan.controlledLoad.workerCpus,
+    tasksetPath,
+    warmupMs: plan.controlledLoad.warmupMs,
+    recoveryMs: plan.controlledLoad.recoveryMs,
+  });
+  return buildSchema3BundleManifestV7(resolved, auxiliary, {
+    bundleGeneration: dryRun ? ZERO_GENERATION : newSchema3BundleGeneration(),
+    baselineManifest,
+    groupManifest,
+    pinnedConcurrentManifest,
     controlledLoadManifest,
     exactCpuManifest,
   });
@@ -1185,10 +1370,17 @@ function outcomeSummary(envelope) {
     .join(",");
 }
 
-async function runBaselineBundle({ resolved, bundleDir, signalSource, writeOut, writeErr }) {
+async function runBaselineBundle({
+  resolved,
+  auxiliary,
+  bundleDir,
+  signalSource,
+  writeOut,
+  writeErr,
+}) {
   const forwarding = installSignalForwarding(signalSource);
   try {
-    let bundle = await readSchema3Bundle({ resolved, bundleDir });
+    let bundle = await readSchema3Bundle({ resolved, auxiliary, bundleDir });
     if (bundle.baseline === undefined) {
       fail("schema-3 bundle does not bind a baseline phase");
     }
@@ -1198,6 +1390,7 @@ async function runBaselineBundle({ resolved, bundleDir, signalSource, writeOut, 
       writeOut(`wave ${committedWaves + 1}/${totalWaves} children=${nextWave.childCount}\n`);
       const execution = await runOneSchema3BaselineWave({
         resolved,
+        auxiliary,
         bundleDir,
         attemptOptions: { signal: forwarding.signal },
       });
@@ -1223,10 +1416,17 @@ async function runBaselineBundle({ resolved, bundleDir, signalSource, writeOut, 
   }
 }
 
-async function runGroupBundle({ resolved, bundleDir, signalSource, writeOut, writeErr }) {
+async function runGroupBundle({
+  resolved,
+  auxiliary,
+  bundleDir,
+  signalSource,
+  writeOut,
+  writeErr,
+}) {
   const forwarding = installSignalForwarding(signalSource);
   try {
-    let bundle = await readSchema3Bundle({ resolved, bundleDir });
+    let bundle = await readSchema3Bundle({ resolved, auxiliary, bundleDir });
     if (bundle.groups === undefined) {
       fail("schema-3 bundle does not bind a CPU-group phase");
     }
@@ -1237,6 +1437,7 @@ async function runGroupBundle({ resolved, bundleDir, signalSource, writeOut, wri
         `context=${nextWave.contextId} children=${nextWave.childCount}\n`);
       const execution = await runOneSchema3GroupWave({
         resolved,
+        auxiliary,
         bundleDir,
         attemptOptions: { signal: forwarding.signal },
       });
@@ -1265,6 +1466,7 @@ async function runGroupBundle({ resolved, bundleDir, signalSource, writeOut, wri
 
 async function runPinnedBundle({
   selection,
+  auxiliarySelection,
   bundleDir,
   signalSource,
   writeOut,
@@ -1273,7 +1475,11 @@ async function runPinnedBundle({
   const { resolved } = selection;
   const forwarding = installSignalForwarding(signalSource);
   try {
-    let bundle = await readSchema3Bundle({ resolved, bundleDir });
+    let bundle = await readSchema3Bundle({
+      resolved,
+      auxiliary: auxiliarySelection?.resolved,
+      bundleDir,
+    });
     if (bundle.pinnedConcurrent === undefined) {
       fail("schema-3 bundle does not bind a pinned-concurrent phase");
     }
@@ -1289,6 +1495,7 @@ async function runPinnedBundle({
       try {
         execution = await runPinnedWaveProcess({
           selection,
+          auxiliarySelection,
           bundleDir,
           controllerCpu: nextWave.controllerCpu,
           tasksetPath,
@@ -1298,7 +1505,11 @@ async function runPinnedBundle({
         if (forwarding.signal.aborted) return signalExitCode(forwarding.received());
         throw error;
       }
-      bundle = await readSchema3Bundle({ resolved, bundleDir });
+      bundle = await readSchema3Bundle({
+        resolved,
+        auxiliary: auxiliarySelection?.resolved,
+        bundleDir,
+      });
       if (forwarding.signal.aborted) return signalExitCode(forwarding.received());
       if (execution.record.committed) {
         const ordinal = execution.record.wave?.ordinal;
@@ -1332,11 +1543,68 @@ async function runPinnedBundle({
   }
 }
 
+async function runCampaignBundle({
+  selection,
+  auxiliarySelection,
+  bundleDir,
+  signalSource,
+  writeOut,
+  writeErr,
+}) {
+  const common = {
+    resolved: selection.resolved,
+    auxiliary: auxiliarySelection.resolved,
+    bundleDir,
+    signalSource,
+    writeOut,
+    writeErr,
+  };
+  const phases = [
+    ["baseline", () => runBaselineBundle(common)],
+    ["CPU groups", () => runGroupBundle(common)],
+    ["pinned concurrent", () => runPinnedBundle({
+      selection,
+      auxiliarySelection,
+      bundleDir,
+      signalSource,
+      writeOut,
+      writeErr,
+    })],
+    ["exact CPUs", () => runExactBundle(common)],
+    ["controlled load", () => runControlledLoadBundle(common)],
+  ];
+  for (const [label, run] of phases) {
+    writeOut(`campaign phase: ${label}\n`);
+    const exitCode = await run();
+    if (exitCode !== 0) return exitCode;
+  }
+  const bundle = await readSchema3Bundle({
+    resolved: selection.resolved,
+    auxiliary: auxiliarySelection.resolved,
+    bundleDir,
+  });
+  const report = buildCampaignReport(bundle);
+  if (!report.complete) {
+    writeErr("campaign phases finished without a complete reportable bundle\n");
+    return 1;
+  }
+  const artifacts = await publishCampaignReport({ bundleDir, report });
+  writeOut(`campaign complete: ${bundleDir}\n`);
+  writeOut(`final reports: ${path.join(bundleDir, artifacts.markdown)} and ` +
+    `${path.join(bundleDir, artifacts.json)}\n`);
+  return 0;
+}
+
 export async function runFaultAffinityCli(argv, io = {}) {
   const writeOut = io.stdout ?? ((value) => process.stdout.write(value));
   const writeErr = io.stderr ?? ((value) => process.stderr.write(value));
   const cwd = io.cwd ?? process.cwd();
   const signalSource = io.signalSource ?? process;
+  const topologyOptions = {
+    ...(io.cpuRoot === undefined ? {} : { cpuRoot: io.cpuRoot }),
+    ...(io.deviceRoot === undefined ? {} : { deviceRoot: io.deviceRoot }),
+    ...(io.allowedCpuSpec === undefined ? {} : { allowedCpuSpec: io.allowedCpuSpec }),
+  };
   try {
     const parsed = parseFaultAffinityArgs(argv);
     if (parsed.command === "help" || parsed.help) {
@@ -1355,13 +1623,19 @@ export async function runFaultAffinityCli(argv, io = {}) {
       return 0;
     }
     if (parsed.command === "recipes") {
-      const recipes = listControlledLoadRecipes();
+      const recipes = [
+        ...listCampaignRecipes().map((recipe) => ({ kind: "diagnose", ...recipe })),
+        ...listControlledLoadRecipes().map((recipe) => ({ kind: "controlled-load", ...recipe })),
+      ];
       if (parsed.json) writeOut(`${JSON.stringify(recipes, null, 2)}\n`);
       else {
         for (const recipe of recipes) {
           writeOut(`${recipe.id}\n  ${recipe.description}\n` +
             `  measured: ${recipe.measuredWorkload}; condition: ${recipe.conditionWorkload}\n` +
-            "  requires: --target-cpu N --load-cpus LIST\n");
+            `  command: ${recipe.kind}\n` +
+            (recipe.kind === "controlled-load"
+              ? "  requires: --target-cpu N --load-cpus LIST\n"
+              : `  default profile: ${recipe.defaultProfile}\n`));
         }
       }
       return 0;
@@ -1388,6 +1662,173 @@ export async function runFaultAffinityCli(argv, io = {}) {
         ? `${JSON.stringify(summary, null, 2)}\n`
         : renderSchema3BundleSummary(summary));
       return 0;
+    }
+    if (parsed.command === "report") {
+      const conditionSelection = resolveConditionSelection(parsed, cwd);
+      const bundleDir = resolveExistingBundleDirectory(path.resolve(cwd, parsed.bundleDir));
+      const bundle = await readSchema3Bundle({
+        resolved: selection.resolved,
+        auxiliary: conditionSelection?.resolved,
+        bundleDir,
+      });
+      if (bundle.manifest.version !== 7 || conditionSelection === undefined) {
+        fail("report requires a schema-3 manifest-v7 campaign and its condition workload");
+      }
+      const report = buildCampaignReport(bundle);
+      if (report.complete) {
+        const published = await readPublishedCampaignReport({
+          bundleDir,
+          manifestBinding: report.bundle.manifestBinding,
+        });
+        if (JSON.stringify(published.report) !== JSON.stringify(report)) {
+          fail("published campaign report does not match the validated bundle");
+        }
+      }
+      writeOut(parsed.json
+        ? `${JSON.stringify(report, null, 2)}\n`
+        : renderCampaignReportMarkdown(report));
+      return 0;
+    }
+    if (parsed.command === "diagnose") {
+      assertPinnedCapabilities(selection);
+      const conditionSelection = resolveConditionSelection(parsed, cwd);
+      if (conditionSelection === undefined) {
+        fail("diagnose requires a condition workload");
+      }
+      assertControlledLoadCondition(conditionSelection);
+      if (parsed.mode !== "dry-run") {
+        assertAutomationBoundary(selection);
+        assertAutomationBoundary(conditionSelection);
+      }
+      if (parsed.mode === "resume") {
+        const bundleDir = resolveExistingBundleDirectory(path.resolve(cwd, parsed.resumeDir));
+        const bundle = await readSchema3Bundle({
+          resolved: selection.resolved,
+          auxiliary: conditionSelection.resolved,
+          bundleDir,
+        });
+        if (bundle.manifest.version !== 7) {
+          fail("diagnose resume requires a schema-3 manifest-v7 campaign bundle");
+        }
+        writeOut(`resuming diagnose campaign measured=${selection.resolved.id} ` +
+          `condition=${conditionSelection.resolved.id} bundle=${bundleDir}\n`);
+        writeOut(`measured warning: ${selection.metadata.liveWarning}\n`);
+        writeOut(`condition warning: ${conditionSelection.metadata.liveWarning}\n`);
+        return await runCampaignBundle({
+          selection,
+          auxiliarySelection: conditionSelection,
+          bundleDir,
+          signalSource,
+          writeOut,
+          writeErr,
+        });
+      }
+
+      const planPath = parsed.planFile === undefined ? undefined : path.resolve(cwd, parsed.planFile);
+      const topology = planPath === undefined ? discoverCampaignTopology(topologyOptions) : undefined;
+      const plan = planPath === undefined
+        ? buildCampaignPlanFromTopology(topology, {
+          profile: parsed.profile,
+          seed: parsed.seed,
+          targetCpu: parsed.targetCpu,
+          loadCpus: parsed.loadCpus,
+        })
+        : readCampaignPlanFile(planPath);
+      const tasksetPath = resolveExecutablePath(parsed.tasksetPath, "--taskset");
+      const scheduledCpus = [...new Set([
+        ...plan.groups.cpuUniverse,
+        ...plan.exact.cpus,
+        ...plan.pinnedConcurrent.contexts.flatMap((context) => [
+          ...context.cpus,
+          context.controllerCpu,
+        ]),
+        plan.controlledLoad.targetCpu,
+        ...plan.controlledLoad.workerCpus,
+      ])].sort((left, right) => left - right);
+      const allowedCpuSpec = ensureAllowedCpus(scheduledCpus, io.allowedCpuSpec);
+      const manifest = buildFreshCampaignManifest(
+        selection.resolved,
+        conditionSelection.resolved,
+        plan,
+        tasksetPath,
+        parsed.mode === "dry-run",
+      );
+      const schedules = {
+        baseline: manifest.baseline.manifest.schedule,
+        groups: manifest.groups.manifest.schedule,
+        pinned: manifest.pinnedConcurrent.manifest.schedule,
+        exact: manifest.exactCpu.manifest.schedule,
+        controlled: manifest.controlledLoad.manifest.schedule,
+      };
+      if (parsed.mode === "dry-run") {
+        writeOut("measured workload:\n");
+        writeOut(`${renderWorkload(selection)}\n`);
+        writeOut("condition workload:\n");
+        writeOut(`${renderWorkload(conditionSelection)}\n`);
+        if (topology === undefined) {
+          writeOut(`plan file: ${planPath}\n`);
+        } else {
+          writeOut(parsed.recipe === undefined
+            ? "recipe: explicit measured and condition workloads\n"
+            : `recipe: ${parsed.recipe}\n`);
+          writeOut(`profile: ${parsed.profile}\n`);
+          writeOut(`topology source: ${topology.classes.source}; ` +
+            `usable CPUs ${compressCpuList(topology.usable)}\n`);
+          if (topology.classes.performance.length > 0) {
+            writeOut(`performance CPUs: ${compressCpuList(topology.classes.performance)}\n`);
+          }
+          if (topology.classes.efficient.length > 0) {
+            writeOut(`efficient CPUs: ${compressCpuList(topology.classes.efficient)}\n`);
+          }
+        }
+        writeOut(`baseline: ${plan.baseline.childrenPerWave} child(ren) x ` +
+          `${plan.baseline.waves} wave(s); ${schedules.baseline.attemptCount} attempt(s)\n`);
+        writeOut(`groups: ${schedules.groups.contextCount} context(s); ` +
+          `${schedules.groups.waveCount} wave(s); ${schedules.groups.attemptCount} attempt(s)\n`);
+        for (const context of plan.groups.contexts) {
+          writeOut(`  group ${context.id}: CPUs ${compressCpuList(context.cpus)}; ` +
+            `${context.childrenPerWave} child(ren)\n`);
+        }
+        writeOut(`pinned-concurrent: ${schedules.pinned.contextCount} context(s); ` +
+          `${schedules.pinned.waveCount} wave(s); ${schedules.pinned.attemptCount} attempt(s)\n`);
+        for (const context of plan.pinnedConcurrent.contexts) {
+          writeOut(`  pinned ${context.group}: CPUs ${compressCpuList(context.cpus)}; ` +
+            `controller ${context.controllerCpu}\n`);
+        }
+        writeOut(`exact CPUs: ${compressCpuList(plan.exact.cpus)}; ` +
+          `${schedules.exact.rounds} round(s); ${schedules.exact.attemptCount} attempt(s)\n`);
+        writeOut(`controlled load: target CPU ${plan.controlledLoad.targetCpu}; workers ` +
+          `${compressCpuList(plan.controlledLoad.workerCpus)}; ` +
+          `${schedules.controlled.attemptsPerLeg} attempt(s) per A1/B/A2 leg\n`);
+        writeOut(`timing: warmup ${schedules.controlled.warmupMs} ms; ` +
+          `recovery ${schedules.controlled.recoveryMs} ms\n`);
+        writeOut(`host allowance: ${allowedCpuSpec}\n`);
+        writeOut(`planned bundle: ${path.resolve(cwd, parsed.outDir)}\n`);
+        writeOut("dry run: no workload executed and no bundle created\n");
+        return 0;
+      }
+
+      const bundleDir = createPrivateBundleDirectory(path.resolve(cwd, parsed.outDir));
+      await initializeSchema3Bundle({
+        resolved: selection.resolved,
+        auxiliary: conditionSelection.resolved,
+        manifest,
+        bundleDir,
+      });
+      writeOut(`starting diagnose campaign measured=${selection.resolved.id} ` +
+        `condition=${conditionSelection.resolved.id} ` +
+        `${planPath === undefined ? `profile=${parsed.profile} ` : "plan=explicit "}` +
+        `bundle=${bundleDir}\n`);
+      writeOut(`measured warning: ${selection.metadata.liveWarning}\n`);
+      writeOut(`condition warning: ${conditionSelection.metadata.liveWarning}\n`);
+      return await runCampaignBundle({
+        selection,
+        auxiliarySelection: conditionSelection,
+        bundleDir,
+        signalSource,
+        writeOut,
+        writeErr,
+      });
     }
     if (parsed.command === "baseline") {
       assertBaselineCapabilities(selection);

@@ -1,8 +1,9 @@
 # Workload catalog
 
-Fault Affinity selects every live workload explicitly. The public catalog has
-exact-only and multi-phase identities; the legacy diagnostic scripts remain
-separate until their remaining phases use the generic owner.
+Fault Affinity binds every live workload identity before execution. Lower-level
+commands select an exact-only or multi-phase identity explicitly; the
+high-level `diagnose` command defaults to the documented
+`wasm-churn-diagnose` recipe. Every live command still requires `--yes`.
 
 ```sh
 node fault-affinity.mjs workloads
@@ -16,7 +17,7 @@ node fault-affinity.mjs inspect --workload wasm-churn
   preserves the published exact-only identity.
 - `wasm-churn-suite` runs the same trigger with a distinct identity declaring
   baseline, group, exact-CPU, and pinned-concurrent capabilities. It is the
-  recommended built-in for a version-2 baseline bundle.
+  recommended built-in for a version-7 diagnostic campaign.
 - `yes-load` is the recommended controlled-load condition. Fault Affinity
   starts one `/usr/bin/yes` process per declared load CPU, discards its output,
   verifies singleton affinity and process identity, and stops the complete set
@@ -41,9 +42,18 @@ List the higher-level built-in recipes separately:
 node fault-affinity.mjs recipes
 ```
 
-`wasm-churn-aba` combines the `wasm-churn` measured identity and `yes-load`
-condition with reviewed A1/B/A2 defaults while leaving target and load CPUs
-explicit.
+The recipe list contains two kinds of convenience:
+
+- `wasm-churn-aba` combines the `wasm-churn` measured identity and `yes-load`
+  condition with reviewed A1/B/A2 defaults while leaving target and load CPUs
+  explicit;
+- `wasm-churn-diagnose` combines `wasm-churn-suite`, `yes-load`, automatic
+  topology planning, and the quick campaign profile; and
+- `node-pglite-diagnose` applies the same campaign defaults to the retained
+  heavyweight `node-pglite-suite` identity.
+
+Recipe names are conveniences, not persisted evidence authority. Bundles bind
+the resolved workload digests and expanded schedules.
 
 The catalog entries are defined in `catalog.mjs`. They bind exact executable,
 argument, lifecycle, outcome, capability, and provenance identities; they are
@@ -103,4 +113,6 @@ evaluated through a shell.
 
 For exact-only use, omit `baseline` or set it to `false`. A version-2 baseline
 bundle requires both `baseline` and `isolated` because its immutable manifest
-binds both phase schedules.
+binds both phase schedules. A version-7 campaign measured workload must set
+`baseline`, `groups`, `isolated`, and `pinnedConcurrent` to `true`; its condition
+workload is selected separately and must use survival-window semantics.
