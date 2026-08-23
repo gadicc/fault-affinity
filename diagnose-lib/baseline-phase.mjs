@@ -438,6 +438,7 @@ export async function runNextBaselinePhaseWave({
       committed: false,
       reason: firstFailure.status,
       errorCode: firstFailure.errorCode ?? null,
+      invalidReason: firstFailure.evidence?.outcome.invalidReason ?? null,
       wave,
       envelope: null,
       attempts,

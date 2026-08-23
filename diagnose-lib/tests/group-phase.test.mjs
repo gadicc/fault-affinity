@@ -227,6 +227,7 @@ test("an operationally invalid child is classified before requiring affinity evi
   assert.equal(invalid.committed, false);
   assert.equal(invalid.reason, "operational-invalid");
   assert.equal(invalid.errorCode, null);
+  assert.equal(invalid.invalidReason, "external-cancel");
   assert.equal(invalid.envelope, null);
   assert.equal(invalid.attempts[0].status, "operational-invalid");
   assert.equal(invalid.attempts[0].evidence.outcome.invalidReason, "external-cancel");

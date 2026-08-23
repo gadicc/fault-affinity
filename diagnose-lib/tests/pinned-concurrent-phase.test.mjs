@@ -212,6 +212,7 @@ test("an operationally invalid pinned child is classified before affinity eviden
   assert.equal(invalid.committed, false);
   assert.equal(invalid.reason, "operational-invalid");
   assert.equal(invalid.errorCode, null);
+  assert.equal(invalid.invalidReason, "external-cancel");
   assert.equal(invalid.envelope, null);
   assert.equal(invalid.attempts.every(({ status }) => status === "operational-invalid"), true);
   assert.equal(invalid.attempts.every(({ evidence }) =>

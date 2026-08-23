@@ -1370,6 +1370,18 @@ function outcomeSummary(envelope) {
     .join(",");
 }
 
+export function formatPhaseFailureDetails(result) {
+  const invalidReason = result.invalidReason ?? result.evidence?.outcome?.invalidReason ?? null;
+  const evidence = result.evidence ?? result.attempts?.find((attempt) =>
+    attempt.evidence?.outcome?.invalidReason === invalidReason)?.evidence;
+  const evidenceErrorCode = evidence?.observation?.launchErrorCode ??
+    evidence?.cleanup?.failureReason ?? evidence?.output?.stdout?.errorCode ??
+    evidence?.output?.stderr?.errorCode ?? null;
+  const details = [...new Set([invalidReason, result.errorCode ?? null, evidenceErrorCode]
+    .filter((value) => typeof value === "string" && value.length > 0))];
+  return details.length === 0 ? "" : ` (${details.join("; ")})`;
+}
+
 async function runBaselineBundle({
   resolved,
   auxiliary,
@@ -1403,7 +1415,7 @@ async function runBaselineBundle({
       if (forwarding.signal.aborted) return signalExitCode(forwarding.received());
       if (execution.result.reason === "complete") break;
       writeErr(`baseline wave was not committed: ${execution.result.reason}` +
-        `${execution.result.errorCode ? ` (${execution.result.errorCode})` : ""}\n`);
+        `${formatPhaseFailureDetails(execution.result)}\n`);
       return 1;
     }
     const { committedWaves, totalWaves, committedAttempts, totalAttempts } =
@@ -1451,7 +1463,7 @@ async function runGroupBundle({
       if (forwarding.signal.aborted) return signalExitCode(forwarding.received());
       if (execution.result.reason === "complete") break;
       writeErr(`group wave was not committed: ${execution.result.reason}` +
-        `${execution.result.errorCode ? ` (${execution.result.errorCode})` : ""}\n`);
+        `${formatPhaseFailureDetails(execution.result)}\n`);
       return 1;
     }
     const { committedWaves, totalWaves, committedAttempts, totalAttempts } =

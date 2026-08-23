@@ -16,6 +16,7 @@ import {
   parseFaultAffinityArgs,
   runFaultAffinityCli,
 } from "../../fault-affinity.mjs";
+import { formatPhaseFailureDetails } from "../../src/fault-affinity/cli.mjs";
 import { readLinuxAllowedCpuList } from "../attempt-runner.mjs";
 import { expandCpuList } from "../pinned-runner.mjs";
 import { readSchema3Bundle } from "../schema3-bundle.mjs";
@@ -27,6 +28,25 @@ afterEach(() => {
   for (const directory of directories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
   }
+});
+
+test("phase failure details retain the typed invalid reason and error code", () => {
+  assert.equal(formatPhaseFailureDetails({
+    invalidReason: "cleanup-incomplete",
+    errorCode: null,
+    attempts: [{
+      status: "operational-invalid",
+      evidence: {
+        outcome: { invalidReason: "cleanup-incomplete" },
+        cleanup: { failureReason: "EIO" },
+      },
+    }],
+  }), " (cleanup-incomplete; EIO)");
+  assert.equal(formatPhaseFailureDetails({
+    evidence: { outcome: { invalidReason: "external-cancel" } },
+    errorCode: null,
+  }), " (external-cancel)");
+  assert.equal(formatPhaseFailureDetails({ invalidReason: null, errorCode: null }), "");
 });
 
 function temporaryDirectory() {
