@@ -254,7 +254,7 @@ export function buildSchema3BundleSummary(bundle) {
     fail("bundle is invalid");
   }
   const version = bundle.manifest.version;
-  if (!Number.isSafeInteger(version) || version < 1 || version > 6) {
+  if (!Number.isSafeInteger(version) || version < 1 || version > 7) {
     fail("manifest version is unsupported");
   }
   if (version === 6 && bundle.debugger === undefined) {
@@ -269,7 +269,7 @@ export function buildSchema3BundleSummary(bundle) {
       manifestBinding: { ...bundle.manifestBinding },
     },
     workload: workloadIdentity(bundle.manifest.workload, "measured workload"),
-    ...(version === 5 ? {
+    ...([5, 7].includes(version) ? {
       conditionWorkload: workloadIdentity(
         bundle.manifest.auxiliaryWorkload,
         "condition workload",

@@ -44,7 +44,7 @@ function baseBundle(version) {
       version,
       bundleGeneration: "c".repeat(32),
       workload: identity("measured"),
-      ...(version === 5 ? { auxiliaryWorkload: identity("condition") } : {}),
+      ...([5, 7].includes(version) ? { auxiliaryWorkload: identity("condition") } : {}),
     },
     manifestBinding: { sha256: "d".repeat(64), bytes: 100 },
   };
@@ -160,7 +160,7 @@ test("a version-4 summary groups baseline, topology, and pinned outcomes", () =>
 
 test("summaries reject unsupported manifests and invalid committed outcomes", () => {
   assert.throws(() => buildSchema3BundleSummary({
-    ...baseBundle(7),
+    ...baseBundle(8),
     exactCpu: exactPhase([]),
   }), /manifest version is unsupported/);
   assert.throws(() => buildSchema3BundleSummary({
@@ -170,6 +170,66 @@ test("summaries reject unsupported manifests and invalid committed outcomes", ()
       attempt: { evidence: { outcome: { validOutcome: false } } },
     }]),
   }), /invalid outcome evidence/);
+});
+
+test("a version-7 summary combines topology, exact, and controlled-load evidence", () => {
+  const pass = evidence();
+  const emptyWaveProgress = {
+    status: "empty",
+    complete: false,
+    committedWaves: 0,
+    totalWaves: 1,
+    committedAttempts: 0,
+    totalAttempts: 1,
+  };
+  const bundle = {
+    ...baseBundle(7),
+    baseline: { manifest: {}, envelopes: [], progress: emptyWaveProgress },
+    groups: {
+      manifest: { topology: { contexts: [{
+        id: "all", kind: "uniform", cpus: [0], childrenPerWave: 1,
+      }] } },
+      envelopes: [],
+      progress: emptyWaveProgress,
+    },
+    pinnedConcurrent: {
+      manifest: { topology: { contexts: [{
+        id: "active", kind: "uniform", cpus: [0], cluster: "-", controllerCpu: 1,
+      }] } },
+      envelopes: [],
+      progress: emptyWaveProgress,
+    },
+    controlledLoad: {
+      manifest: {
+        execution: { targetCpu: 0, workerCpus: [1] },
+        schedule: {
+          legs: [
+            { leg: "a1", condition: "without-load" },
+            { leg: "b", condition: "with-load" },
+            { leg: "a2", condition: "after-recovery" },
+          ],
+          attemptsPerLeg: 1,
+          warmupMs: 0,
+          recoveryMs: 0,
+        },
+      },
+      envelope: null,
+      progress: {
+        status: "empty", complete: false, committedSessions: 0, totalSessions: 1,
+      },
+    },
+    exactCpu: exactPhase([
+      { slot: { cpu: 2 }, attempt: { evidence: pass } },
+    ], [2], 1),
+  };
+  const summary = buildSchema3BundleSummary(bundle);
+  assert.equal(summary.bundle.manifestVersion, 7);
+  assert.equal(summary.conditionWorkload.id, "condition");
+  assert.equal(summary.phases.baseline.status, "empty");
+  assert.equal(summary.phases.groups.contexts[0].id, "all");
+  assert.equal(summary.phases.pinnedConcurrent.contexts[0].controllerCpu, 1);
+  assert.equal(summary.phases.controlledLoad.targetCpu, 0);
+  assert.equal(summary.phases.exactCpu.status, "complete");
 });
 
 test("a version-6 summary inspects the debugger phase progress", () => {
@@ -267,10 +327,10 @@ test("debugger summaries require the v6 phase and reconcile its progress", () =>
     maxCaptures: 2,
   })), /does not reconcile/);
 
-  for (const version of [1, 2, 3, 4, 5]) {
+  for (const version of [1, 2, 3, 4, 5, 7]) {
     const summary = buildSchema3BundleSummary({
       ...baseBundle(version),
-      ...(version === 5 ? { controlledLoad: undefined } : {}),
+      ...([5, 7].includes(version) ? { controlledLoad: undefined } : {}),
       exactCpu: exactPhase([]),
     });
     assert.equal(summary.phases.debugger.status, "not-bound", `v${version}`);

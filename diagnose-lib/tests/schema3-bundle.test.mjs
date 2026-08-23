@@ -37,6 +37,7 @@ import {
   buildSchema3BundleManifestV3,
   buildSchema3BundleManifestV4,
   buildSchema3BundleManifestV5,
+  buildSchema3BundleManifestV7,
   canonicalSchema3BundleManifestLine,
   initializeSchema3Bundle,
   readSchema3Bundle,
@@ -243,6 +244,17 @@ function bundleManifestV4(resolved, options = {}) {
 function bundleManifestV5(measured, auxiliary, options = {}) {
   return buildSchema3BundleManifestV5(measured, auxiliary, {
     bundleGeneration: "abcdef0123456789abcdef0123456789",
+    controlledLoadManifest: controlledLoadManifest(measured, auxiliary, options),
+    exactCpuManifest: exactCpuManifest(measured, options),
+  });
+}
+
+function bundleManifestV7(measured, auxiliary, options = {}) {
+  return buildSchema3BundleManifestV7(measured, auxiliary, {
+    bundleGeneration: "abcdef0123456789abcdef0123456789",
+    baselineManifest: baselineManifest(measured, options),
+    groupManifest: groupManifest(measured, options),
+    pinnedConcurrentManifest: pinnedConcurrentManifest(measured, options),
     controlledLoadManifest: controlledLoadManifest(measured, auxiliary, options),
     exactCpuManifest: exactCpuManifest(measured, options),
   });
@@ -481,6 +493,91 @@ test("schema-3 manifest v5 binds a composed controlled-load variant without chan
     bundleDir,
   }), /auxiliary workload does not match/);
   const changed = bundleManifestV5(resolved, auxiliary, { loadAttemptsPerLeg: 2 });
+  await assert.rejects(initializeSchema3Bundle({
+    resolved,
+    auxiliary,
+    manifest: changed,
+    bundleDir,
+  }), /different manifest/);
+});
+
+test("schema-3 manifest v7 binds the complete topology and controlled-load campaign", {
+  timeout: 10_000,
+}, async () => {
+  const resolved = pinnedConcurrentWorkload();
+  const auxiliary = controlledLoadAuxiliaryWorkload();
+  const manifest = bundleManifestV7(resolved, auxiliary);
+  const bundleDir = bundleDirectory();
+  const initialized = await initializeSchema3Bundle({
+    resolved,
+    auxiliary,
+    manifest,
+    bundleDir,
+  });
+
+  assert.equal(initialized.manifest.version, 7);
+  assert.equal(initialized.manifest.phaseControls.baseline, "supported");
+  assert.equal(initialized.manifest.phaseControls.groups, "supported");
+  assert.equal(initialized.manifest.phaseControls.pinnedConcurrent, "supported");
+  assert.equal(initialized.manifest.phaseControls.isolated, "supported");
+  assert.equal(initialized.manifest.phaseControls.controlledLoad, "supported");
+  assert.equal(initialized.manifest.auxiliaryWorkloadBinding.digest, auxiliary.digest);
+  for (const phase of [
+    "baseline", "groups", "pinnedConcurrent", "controlledLoad", "exactCpu",
+  ]) {
+    assert.equal(initialized[phase].progress.status, "empty", phase);
+  }
+  for (const directory of [
+    SCHEMA3_BASELINE_STATE_DIRECTORY,
+    SCHEMA3_GROUP_STATE_DIRECTORY,
+    SCHEMA3_PINNED_CONCURRENT_STATE_DIRECTORY,
+    SCHEMA3_CONTROLLED_LOAD_STATE_DIRECTORY,
+    SCHEMA3_EXACT_CPU_STATE_DIRECTORY,
+  ]) {
+    assert.equal(statSync(path.join(bundleDir, directory)).mode & 0o777, 0o700, directory);
+  }
+
+  const reopened = await readSchema3Bundle({ resolved, auxiliary, bundleDir });
+  assert.deepEqual(reopened.manifest, initialized.manifest);
+  assert.deepEqual(reopened.baseline, initialized.baseline);
+  assert.deepEqual(reopened.groups, initialized.groups);
+  assert.deepEqual(reopened.pinnedConcurrent, initialized.pinnedConcurrent);
+  assert.deepEqual(reopened.controlledLoad, initialized.controlledLoad);
+  assert.deepEqual(reopened.exactCpu, initialized.exactCpu);
+
+  const baseline = await runOneSchema3BaselineWave({
+    resolved,
+    auxiliary,
+    bundleDir,
+  });
+  assert.equal(baseline.result.reason, "committed");
+  const groups = await runOneSchema3GroupWave({ resolved, auxiliary, bundleDir });
+  assert.equal(groups.result.reason, "committed");
+  const controllerCpu = manifest.pinnedConcurrent.manifest.topology.contexts[0].controllerCpu;
+  const pinned = await runOneSchema3PinnedConcurrentWave({
+    resolved,
+    auxiliary,
+    bundleDir,
+    readControllerCpuList: () => String(controllerCpu),
+  });
+  assert.equal(pinned.result.reason, "committed");
+  const exact = await runOneSchema3ExactCpuAttempt({ resolved, auxiliary, bundleDir });
+  assert.equal(exact.result.reason, "committed");
+  const controlled = await runOneSchema3ControlledLoadSession({
+    resolved,
+    auxiliary,
+    bundleDir,
+  });
+  assert.equal(controlled.result.reason, "committed", JSON.stringify(controlled.result));
+  for (const phase of [
+    "baseline", "groups", "pinnedConcurrent", "controlledLoad", "exactCpu",
+  ]) {
+    assert.equal(controlled.bundle[phase].progress.status, "complete", phase);
+  }
+
+  await assert.rejects(readSchema3Bundle({ resolved, bundleDir }),
+    /require the resolved auxiliary workload/);
+  const changed = bundleManifestV7(resolved, auxiliary, { groupRounds: 2 });
   await assert.rejects(initializeSchema3Bundle({
     resolved,
     auxiliary,

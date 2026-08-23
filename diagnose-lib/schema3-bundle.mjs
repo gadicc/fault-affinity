@@ -94,6 +94,7 @@ export const SCHEMA3_BUNDLE_MANIFEST_V3_VERSION = 3;
 export const SCHEMA3_BUNDLE_MANIFEST_V4_VERSION = 4;
 export const SCHEMA3_BUNDLE_MANIFEST_V5_VERSION = 5;
 export const SCHEMA3_BUNDLE_MANIFEST_V6_VERSION = 6;
+export const SCHEMA3_BUNDLE_MANIFEST_V7_VERSION = 7;
 export const SCHEMA3_RUN_SCHEMA_VERSION = 3;
 export const SCHEMA3_BUNDLE_FILE = "fault-affinity-bundle.json";
 export const SCHEMA3_BUNDLE_FILE_MAX_BYTES = 8 * 1024 * 1024;
@@ -334,22 +335,31 @@ function parseManifestContext(resolved, value, auxiliary) {
     value.version === SCHEMA3_BUNDLE_MANIFEST_V3_VERSION ||
     value.version === SCHEMA3_BUNDLE_MANIFEST_V4_VERSION ||
     value.version === SCHEMA3_BUNDLE_MANIFEST_V5_VERSION ||
-    value.version === SCHEMA3_BUNDLE_MANIFEST_V6_VERSION,
+    value.version === SCHEMA3_BUNDLE_MANIFEST_V6_VERSION ||
+    value.version === SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
   `schema-3 bundle manifest version must be ${SCHEMA3_BUNDLE_MANIFEST_VERSION}, ` +
     `${SCHEMA3_BUNDLE_MANIFEST_V2_VERSION}, ${SCHEMA3_BUNDLE_MANIFEST_V3_VERSION}, ` +
-    `${SCHEMA3_BUNDLE_MANIFEST_V4_VERSION}, ${SCHEMA3_BUNDLE_MANIFEST_V5_VERSION}, or ` +
-    `${SCHEMA3_BUNDLE_MANIFEST_V6_VERSION}`);
+    `${SCHEMA3_BUNDLE_MANIFEST_V4_VERSION}, ${SCHEMA3_BUNDLE_MANIFEST_V5_VERSION}, ` +
+    `${SCHEMA3_BUNDLE_MANIFEST_V6_VERSION}, or ${SCHEMA3_BUNDLE_MANIFEST_V7_VERSION}`);
   const hasBaseline = [
     SCHEMA3_BUNDLE_MANIFEST_V2_VERSION,
     SCHEMA3_BUNDLE_MANIFEST_V3_VERSION,
     SCHEMA3_BUNDLE_MANIFEST_V4_VERSION,
+    SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
   ].includes(value.version);
   const hasGroups = [
     SCHEMA3_BUNDLE_MANIFEST_V3_VERSION,
     SCHEMA3_BUNDLE_MANIFEST_V4_VERSION,
+    SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
   ].includes(value.version);
-  const hasPinnedConcurrent = value.version === SCHEMA3_BUNDLE_MANIFEST_V4_VERSION;
-  const hasControlledLoad = value.version === SCHEMA3_BUNDLE_MANIFEST_V5_VERSION;
+  const hasPinnedConcurrent = [
+    SCHEMA3_BUNDLE_MANIFEST_V4_VERSION,
+    SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
+  ].includes(value.version);
+  const hasControlledLoad = [
+    SCHEMA3_BUNDLE_MANIFEST_V5_VERSION,
+    SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
+  ].includes(value.version);
   const hasDebugger = value.version === SCHEMA3_BUNDLE_MANIFEST_V6_VERSION;
   exactKeys(value, [
     "version",
@@ -647,6 +657,77 @@ export function buildSchema3BundleManifestV6(resolved, options) {
   });
 }
 
+export function buildSchema3BundleManifestV7(measured, auxiliary, options) {
+  exactKeys(options, [
+    "bundleGeneration", "baselineManifest", "groupManifest",
+    "pinnedConcurrentManifest", "controlledLoadManifest", "exactCpuManifest",
+  ], "schema-3 bundle v7 options");
+  requireCondition(typeof options.bundleGeneration === "string" &&
+    GENERATION_RE.test(options.bundleGeneration),
+  "bundle generation must be exactly 32 lowercase hexadecimal characters");
+  const baselineManifest = parseBaselinePhaseManifest(measured, options.baselineManifest);
+  const groupManifest = parseGroupPhaseManifest(measured, options.groupManifest);
+  const pinnedConcurrentManifest = parsePinnedConcurrentPhaseManifest(
+    measured,
+    options.pinnedConcurrentManifest,
+  );
+  const controlledLoadManifest = parseControlledLoadSessionManifest(
+    measured,
+    auxiliary,
+    options.controlledLoadManifest,
+  );
+  const exactCpuManifest = parseExactCpuPhaseManifest(measured, options.exactCpuManifest);
+  return parseSchema3BundleManifest(measured, {
+    version: SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
+    bundleFormatVersion: SCHEMA3_BUNDLE_FORMAT_VERSION,
+    runSchemaVersion: SCHEMA3_RUN_SCHEMA_VERSION,
+    bundleGeneration: options.bundleGeneration,
+    workload: resolvedWorkloadJson(measured),
+    workloadBinding: workloadBinding(measured),
+    auxiliaryWorkload: resolvedWorkloadJson(auxiliary),
+    auxiliaryWorkloadBinding: workloadBinding(auxiliary),
+    phaseControls: expectedPhaseControls(measured,
+      new Set(["baseline", "groups", "isolated", "pinnedConcurrent"]), {
+        controlledLoad: true,
+      }),
+    baseline: {
+      protocol: "baseline-concurrent-v1",
+      stateDirectory: SCHEMA3_BASELINE_STATE_DIRECTORY,
+      manifestBinding: baselinePhaseManifestBinding(measured, baselineManifest),
+      manifest: baselineManifest,
+    },
+    groups: {
+      protocol: "cpu-groups-v1",
+      stateDirectory: SCHEMA3_GROUP_STATE_DIRECTORY,
+      manifestBinding: groupPhaseManifestBinding(measured, groupManifest),
+      manifest: groupManifest,
+    },
+    pinnedConcurrent: {
+      protocol: "pinned-concurrent-v1",
+      stateDirectory: SCHEMA3_PINNED_CONCURRENT_STATE_DIRECTORY,
+      manifestBinding: pinnedConcurrentPhaseManifestBinding(measured,
+        pinnedConcurrentManifest),
+      manifest: pinnedConcurrentManifest,
+    },
+    controlledLoad: {
+      protocol: "controlled-load-aba-v1",
+      stateDirectory: SCHEMA3_CONTROLLED_LOAD_STATE_DIRECTORY,
+      manifestBinding: controlledLoadSessionManifestBinding(
+        measured,
+        auxiliary,
+        controlledLoadManifest,
+      ),
+      manifest: controlledLoadManifest,
+    },
+    exactCpu: {
+      protocol: "isolated-exact-cpu-v1",
+      stateDirectory: SCHEMA3_EXACT_CPU_STATE_DIRECTORY,
+      manifestBinding: exactCpuPhaseManifestBinding(measured, exactCpuManifest),
+      manifest: exactCpuManifest,
+    },
+  }, auxiliary);
+}
+
 export function parseSchema3BundleManifest(resolved, value, auxiliary) {
   parseManifestContext(resolved, value, auxiliary);
   return canonicalClone(value);
@@ -722,6 +803,9 @@ async function listRoot(adapter) {
 }
 
 function expectedStateDirectories(manifest) {
+  if (manifest.version === SCHEMA3_BUNDLE_MANIFEST_V7_VERSION) {
+    return ["baseline", "controlled-load", "exact-cpu", "groups", "pinned-concurrent"];
+  }
   if (manifest.version === SCHEMA3_BUNDLE_MANIFEST_V6_VERSION) {
     return ["debugger", "exact-cpu"];
   }
@@ -813,6 +897,7 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
     SCHEMA3_BUNDLE_MANIFEST_V2_VERSION,
     SCHEMA3_BUNDLE_MANIFEST_V3_VERSION,
     SCHEMA3_BUNDLE_MANIFEST_V4_VERSION,
+    SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
   ].includes(manifest.version)) {
     const baselineStateDir = validatePrivateDirectory(path.join(stateRoot, "baseline"),
       "schema-3 baseline state directory");
@@ -825,6 +910,7 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
   if ([
     SCHEMA3_BUNDLE_MANIFEST_V3_VERSION,
     SCHEMA3_BUNDLE_MANIFEST_V4_VERSION,
+    SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
   ].includes(manifest.version)) {
     const groupStateDir = validatePrivateDirectory(path.join(stateRoot, "groups"),
       "schema-3 group state directory");
@@ -834,7 +920,8 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
     "schema-3 group state belongs to a different phase manifest");
   }
   let pinnedConcurrent;
-  if (manifest.version === SCHEMA3_BUNDLE_MANIFEST_V4_VERSION) {
+  if ([SCHEMA3_BUNDLE_MANIFEST_V4_VERSION, SCHEMA3_BUNDLE_MANIFEST_V7_VERSION]
+    .includes(manifest.version)) {
     const pinnedConcurrentStateDir = validatePrivateDirectory(
       path.join(stateRoot, "pinned-concurrent"),
       "schema-3 pinned-concurrent state directory",
@@ -848,7 +935,8 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
     "schema-3 pinned-concurrent state belongs to a different phase manifest");
   }
   let controlledLoad;
-  if (manifest.version === SCHEMA3_BUNDLE_MANIFEST_V5_VERSION) {
+  if ([SCHEMA3_BUNDLE_MANIFEST_V5_VERSION, SCHEMA3_BUNDLE_MANIFEST_V7_VERSION]
+    .includes(manifest.version)) {
     const controlledLoadStateDir = validatePrivateDirectory(
       path.join(stateRoot, "controlled-load"),
       "schema-3 controlled-load state directory",
@@ -951,6 +1039,7 @@ export async function initializeSchema3Bundle({
       SCHEMA3_BUNDLE_MANIFEST_V2_VERSION,
       SCHEMA3_BUNDLE_MANIFEST_V3_VERSION,
       SCHEMA3_BUNDLE_MANIFEST_V4_VERSION,
+      SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
     ].includes(storedManifest.version)) {
       await initializeBaselinePhaseStore({
         resolved,
@@ -961,6 +1050,7 @@ export async function initializeSchema3Bundle({
     if ([
       SCHEMA3_BUNDLE_MANIFEST_V3_VERSION,
       SCHEMA3_BUNDLE_MANIFEST_V4_VERSION,
+      SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
     ].includes(storedManifest.version)) {
       await initializeGroupPhaseStore({
         resolved,
@@ -968,14 +1058,16 @@ export async function initializeSchema3Bundle({
         stateDir: path.join(stateRoot, "groups"),
       });
     }
-    if (storedManifest.version === SCHEMA3_BUNDLE_MANIFEST_V4_VERSION) {
+    if ([SCHEMA3_BUNDLE_MANIFEST_V4_VERSION, SCHEMA3_BUNDLE_MANIFEST_V7_VERSION]
+      .includes(storedManifest.version)) {
       await initializePinnedConcurrentPhaseStore({
         resolved,
         manifest: storedManifest.pinnedConcurrent.manifest,
         stateDir: path.join(stateRoot, "pinned-concurrent"),
       });
     }
-    if (storedManifest.version === SCHEMA3_BUNDLE_MANIFEST_V5_VERSION) {
+    if ([SCHEMA3_BUNDLE_MANIFEST_V5_VERSION, SCHEMA3_BUNDLE_MANIFEST_V7_VERSION]
+      .includes(storedManifest.version)) {
       await initializeControlledLoadPhaseStore({
         measured: resolved,
         auxiliary,
@@ -1174,7 +1266,10 @@ export async function runOneSchema3PinnedConcurrentWave({
   "schema-3 readControllerCpuList must be a function");
   return withBundleExecutionLease({ bundleDir, flockPath, waitMs: leaseWaitMs }, async (lease) => {
     let bundle = await readBundleState(resolved, auxiliary, bundleDir);
-    requireCondition(bundle.manifest.version === SCHEMA3_BUNDLE_MANIFEST_V4_VERSION &&
+    requireCondition([
+      SCHEMA3_BUNDLE_MANIFEST_V4_VERSION,
+      SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
+    ].includes(bundle.manifest.version) &&
       bundle.pinnedConcurrent !== undefined,
     "schema-3 bundle manifest does not bind a pinned-concurrent phase");
     assertBundleExecutionLeaseHeld(lease);
@@ -1228,7 +1323,10 @@ export async function runOneSchema3ControlledLoadSession({
     "schema-3 waitInterval must be a function");
   return withBundleExecutionLease({ bundleDir, flockPath, waitMs: leaseWaitMs }, async (lease) => {
     let bundle = await readBundleState(resolved, auxiliary, bundleDir);
-    requireCondition(bundle.manifest.version === SCHEMA3_BUNDLE_MANIFEST_V5_VERSION &&
+    requireCondition([
+      SCHEMA3_BUNDLE_MANIFEST_V5_VERSION,
+      SCHEMA3_BUNDLE_MANIFEST_V7_VERSION,
+    ].includes(bundle.manifest.version) &&
       bundle.controlledLoad !== undefined,
     "schema-3 bundle manifest does not bind a controlled-load phase");
     assertBundleExecutionLeaseHeld(lease);

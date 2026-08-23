@@ -1032,8 +1032,8 @@ async function runExactBundle({
   const forwarding = installSignalForwarding(signalSource);
   try {
     let bundle = await readSchema3Bundle({ resolved, auxiliary, bundleDir });
-    if (auxiliary !== undefined && bundle.manifest.version !== 5) {
-      fail("a condition workload applies only to schema-3 manifest-v5 bundles");
+    if (auxiliary !== undefined && ![5, 7].includes(bundle.manifest.version)) {
+      fail("a condition workload applies only to schema-3 manifest-v5 or v7 bundles");
     }
     while (!bundle.exactCpu.progress.complete) {
       if (forwarding.signal.aborted) return signalExitCode(forwarding.received());
@@ -1380,8 +1380,8 @@ export async function runFaultAffinityCli(argv, io = {}) {
         auxiliary: conditionSelection?.resolved,
         bundleDir,
       });
-      if (bundle.manifest.version !== 5 && conditionSelection !== undefined) {
-        fail("a condition workload applies only to schema-3 manifest-v5 bundles");
+      if (![5, 7].includes(bundle.manifest.version) && conditionSelection !== undefined) {
+        fail("a condition workload applies only to schema-3 manifest-v5 or v7 bundles");
       }
       const summary = buildSchema3BundleSummary(bundle);
       writeOut(parsed.json

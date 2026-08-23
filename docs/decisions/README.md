@@ -39,3 +39,4 @@ behavior and compatibility boundaries, not current runtime capabilities.
 | [ADR 0031](0031-schema3-manifest-v6-debugger.md) | Accepted | Bind the debugger-focused exact-CPU variant in schema-3 manifest v6 under one lease. |
 | [ADR 0032](0032-public-debugger-command.md) | Accepted | Publish the debugger command for v6 bundles and the two debugger-capable built-in profiles. |
 | [ADR 0033](0033-built-in-controlled-load-recipes.md) | Accepted | Make the reduced A1/B/A2 path repeatable through the `yes-load` built-in and `wasm-churn-aba` recipe without changing manifest v5. |
+| [ADR 0034](0034-schema3-manifest-v7-campaign.md) | Accepted | Combine topology screening, exact-CPU localization, and focused controlled load in one immutable schema-3 v7 campaign. |
