@@ -204,3 +204,32 @@ test("an invalid child cancels peers and leaves the complete group wave availabl
   assert.equal(retried.reason, "committed");
   assert.equal(assessGroupPhasePrefix(resolved, value, [retried.envelope]).complete, true);
 });
+
+test("an operationally invalid child is classified before requiring affinity evidence", async () => {
+  const resolved = workload();
+  const cpus = allowedCpus();
+  const value = manifest(resolved, {
+    cpus,
+    contexts: [{ id: "all", kind: "uniform", cpus, childrenPerWave: 1 }],
+    rounds: 1,
+  });
+  const controller = new AbortController();
+  controller.abort();
+  const invalidResult = await runWorkloadAttempt(resolved, { signal: controller.signal });
+
+  assert.equal(invalidResult.execution.cpuAffinity, null);
+  const invalid = await runNextGroupPhaseWave({
+    resolved,
+    manifest: value,
+    runAttempt: async () => invalidResult,
+  });
+
+  assert.equal(invalid.committed, false);
+  assert.equal(invalid.reason, "operational-invalid");
+  assert.equal(invalid.errorCode, null);
+  assert.equal(invalid.envelope, null);
+  assert.equal(invalid.attempts[0].status, "operational-invalid");
+  assert.equal(invalid.attempts[0].evidence.outcome.invalidReason, "external-cancel");
+  assert.equal(Object.hasOwn(invalid.attempts[0], "affinity"), false);
+  assert.equal(assessGroupPhasePrefix(resolved, value).committedWaves, 0);
+});

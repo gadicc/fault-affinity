@@ -520,10 +520,8 @@ export async function runNextPinnedConcurrentPhaseWave({
         return failure;
       }
       let evidence;
-      let affinity;
       try {
         evidence = buildAttemptEvidence(resolved, result);
-        affinity = childAffinityWitness(manifest, record, result.execution);
       } catch (error) {
         const failure = {
           status: "runner-error",
@@ -534,7 +532,19 @@ export async function runNextPinnedConcurrentPhaseWave({
         return failure;
       }
       if (evidence.outcome.validOutcome !== true) {
-        const failure = { status: "operational-invalid", record, evidence, affinity };
+        const failure = { status: "operational-invalid", record, evidence };
+        failAttempt(failure);
+        return failure;
+      }
+      let affinity;
+      try {
+        affinity = childAffinityWitness(manifest, record, result.execution);
+      } catch (error) {
+        const failure = {
+          status: "runner-error",
+          record,
+          errorCode: normalizedErrorCode(error, "INVALID_ATTEMPT_RESULT"),
+        };
         failAttempt(failure);
         return failure;
       }

@@ -191,3 +191,31 @@ test("an invalid pinned child cancels its peers and consumes no wave", async () 
   assert.equal(peerCancelled, value.schedule.attemptCount > 1);
   assert.equal(assessPinnedConcurrentPhasePrefix(resolved, value).committedWaves, 0);
 });
+
+test("an operationally invalid pinned child is classified before affinity evidence", async () => {
+  const resolved = workload();
+  const value = manifest(resolved, { rounds: 1 });
+  const next = assessPinnedConcurrentPhasePrefix(resolved, value).nextWave;
+  const controller = new AbortController();
+  controller.abort();
+  const { runWorkloadAttempt } = await import("../attempt-runner.mjs");
+  const invalidResult = await runWorkloadAttempt(resolved, { signal: controller.signal });
+
+  assert.equal(invalidResult.execution.cpuAffinity, null);
+  const invalid = await runNextPinnedConcurrentPhaseWave({
+    resolved,
+    manifest: value,
+    readControllerCpuList: () => String(next.controllerCpu),
+    runAttempt: async () => invalidResult,
+  });
+
+  assert.equal(invalid.committed, false);
+  assert.equal(invalid.reason, "operational-invalid");
+  assert.equal(invalid.errorCode, null);
+  assert.equal(invalid.envelope, null);
+  assert.equal(invalid.attempts.every(({ status }) => status === "operational-invalid"), true);
+  assert.equal(invalid.attempts.every(({ evidence }) =>
+    evidence.outcome.invalidReason === "external-cancel"), true);
+  assert.equal(invalid.attempts.every((attempt) => !Object.hasOwn(attempt, "affinity")), true);
+  assert.equal(assessPinnedConcurrentPhasePrefix(resolved, value).committedWaves, 0);
+});

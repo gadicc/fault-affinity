@@ -522,10 +522,8 @@ export async function runNextGroupPhaseWave({
         return failure;
       }
       let evidence;
-      let affinity;
       try {
         evidence = buildAttemptEvidence(resolved, result);
-        affinity = affinityWitness(manifest, groupContext, result.execution);
       } catch (error) {
         const failure = {
           status: "runner-error",
@@ -536,7 +534,19 @@ export async function runNextGroupPhaseWave({
         return failure;
       }
       if (evidence.outcome.validOutcome !== true) {
-        const failure = { status: "operational-invalid", position, evidence, affinity };
+        const failure = { status: "operational-invalid", position, evidence };
+        recordFailure(failure);
+        return failure;
+      }
+      let affinity;
+      try {
+        affinity = affinityWitness(manifest, groupContext, result.execution);
+      } catch (error) {
+        const failure = {
+          status: "runner-error",
+          position,
+          errorCode: normalizedErrorCode(error, "INVALID_ATTEMPT_RESULT"),
+        };
         recordFailure(failure);
         return failure;
       }
