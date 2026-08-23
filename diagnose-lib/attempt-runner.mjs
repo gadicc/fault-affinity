@@ -944,6 +944,15 @@ function createRunner({
               chooseManagedCancel();
               return;
             }
+            // Ordinary attempts may accept a same-group zombie because the
+            // ordered workload-exit record supplies terminal status. Managed
+            // workloads are different: readiness is published only while the
+            // observed identity is still live.
+            if (!actual.live) {
+              managedObserverError = "MANAGED_WORKLOAD_NOT_LIVE";
+              chooseManagedCancel();
+              return;
+            }
             try {
               const returned = options.onStarted(deepFreeze({
                 monotonicNs: message.monotonicNs,

@@ -149,9 +149,10 @@ The controlled-load foundation and public command now compose the managed
 auxiliary lifecycle, verified worker sets, complete A1/B/A2 envelopes,
 complete-only store, and schema-3 manifest-v5 ownership. The debugger path now
 adds a bound phase manifest, a structured control protocol, bounded attempt
-I/O, a supervised adapter, complete-only attempt envelopes, and schema-3
-manifest-v6 ownership on top, without a public command yet. Frequency
-protocols still need workload-bound adapters where applicable. Historical Node
+I/O, a supervised adapter, complete-only attempt envelopes, schema-3
+manifest-v6 ownership, and a public debugger command with per-run summary
+detail. Frequency protocols still need workload-bound adapters where
+applicable. Historical Node
 A/B/A and Node-by-warmup modes remain multi-workload experiments outside the
 current schema.
 

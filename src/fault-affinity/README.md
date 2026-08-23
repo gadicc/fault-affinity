@@ -40,6 +40,16 @@ schema-3 owner retains one bundle lease across the complete A1/B/A2 session;
 exact resume of the same v5 bundle receives the auxiliary identity only for
 manifest validation and does not start the condition workload.
 
+Debugger orchestration targets the manifest-v6 variant. The command resolves
+one explicitly selected workload with isolated and gdb capabilities, validates
+the pinned CPU against the invoking allowance, and hashes the resolved
+debugger and taskset executables into the phase manifest before any launch. A
+custom workload's environment binding authority stays process-local and is
+cleared in a finally block. One bundle lease covers each attempt's selection,
+supervised adapter launch, complete-only envelope, and triple commit; an
+operationally invalid attempt stops the run nonzero without advancing the
+durable prefix.
+
 `schema3-summary.mjs` derives read-only text and versioned JSON from bundle
 objects that have already passed the authoritative schema-3 reader. It reports
 only committed observations, preserves incomplete and unbound phase status, and

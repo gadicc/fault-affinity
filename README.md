@@ -5,9 +5,21 @@ Fault Affinity is a Linux harness for bounded, resumable investigation of interm
 The project began with native faults during Node.js and PGlite WebAssembly initialization. That workload remains as a historical heavyweight built-in and case study. The recommended reduced built-in is now the dependency-free WebAssembly churn workload.
 
 The public generic commands own exact-only, baseline, explicit CPU-group,
-controller-aware pinned-concurrent, and controlled-load schema-3 bundles. The
+controller-aware pinned-concurrent, controlled-load, and debugger-capture
+schema-3 bundles (manifest versions 1 through 6). The
 broader legacy diagnostic suite still provides telemetry, debugger, frequency,
 and final-report phases specifically for the Node/PGlite investigation.
+
+Plan a generic debugger capture without executing anything:
+
+```sh
+node fault-affinity.mjs debugger --workload wasm-churn-debugger \
+  --cpu 19 --max-runs 6 --max-captures 3 --debugger /usr/bin/gdb \
+  --out-dir diagnostics/debugger-capture --dry-run
+```
+
+See [capture a debugger phase](docs/guides/debugger-phase.md) for the v6
+bundle flow, resume rules, and per-run summaries.
 
 ## Safety
 

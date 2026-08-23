@@ -872,7 +872,8 @@ function buildFreshDebuggerManifest(resolved, parsed, debuggerPath, tasksetPath,
   });
 }
 
-function installSignalForwarding(signalSource) {  const controller = new AbortController();
+function installSignalForwarding(signalSource) {
+  const controller = new AbortController();
   let received = null;
   const handlers = new Map([
     ["SIGINT", () => { received ??= "SIGINT"; controller.abort(); }],

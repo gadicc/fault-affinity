@@ -60,11 +60,11 @@ hash to the envelope's channel evidence. Runs complete at the manifest's run
 cap or capture cap; out-of-order, duplicate, foreign, and tampered artifacts
 fail closed.
 
-## Remaining boundaries
+## Execution boundary
 
 The [schema-3 manifest-v6 variant](../decisions/0031-schema3-manifest-v6-debugger.md)
 binds the debugger phase beside exact-CPU state and owns attempts under one
-lease. A public debugger command and user-facing debugger summaries remain
-Roadmap 6. Until they exist, envelopes and stores are
-exercised only by synthetic tests against the harmless fake-debugger fixture;
-no test launches GDB or a fault workload.
+lease. The public `debugger` command drives fresh, dry-run, and resume flows
+for v6 bundles, and the read-only summary renders per-run typed outcomes.
+Envelopes and stores are exercised by synthetic tests against the harmless
+fake-debugger fixture; no test launches GDB or a fault workload.

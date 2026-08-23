@@ -72,11 +72,12 @@ debugger exit still leaves the adapter operationally unsuccessful. Partial,
 overflowed, invalid, or incompletely drained channels never qualify as a
 complete attempt.
 
-## Remaining boundaries
+## Execution boundary
 
 [Complete-only attempt envelopes](generic-debugger-attempt-envelopes.md) and
 their durable artifact store bind one successful attempt into a canonical
-record. Schema-3 bundle integration, read-only summaries, and a public
-command remain later steps. Until they exist, the supervised adapter is
-exercised only by synthetic tests with a harmless finite fake-debugger
-fixture; no test launches GDB.
+record. The schema-3 manifest-v6 variant owns the phase under one bundle
+lease, and the public `debugger` command executes it; the read-only summary
+renders per-run typed outcomes. The supervised adapter is exercised by
+synthetic tests with a harmless finite fake-debugger fixture; no test
+launches GDB.

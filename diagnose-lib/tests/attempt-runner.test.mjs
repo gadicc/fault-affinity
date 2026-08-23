@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   createAttemptRunner,
+  createManagedWorkloadRunner,
   readLinuxProcessIdentity,
   runManagedWorkload,
   runWorkloadAttempt,
@@ -485,6 +486,40 @@ test("managed readiness observers are synchronous and isolated from canonical at
     errorCode: "MANAGED_START_OBSERVER_ASYNC",
   });
   assert.equal(managed.cleanup.groupDrained, true);
+});
+
+test("a managed workload zombie never publishes readiness", { timeout: 5_000 }, async () => {
+  const files = launcher();
+  let starts = 0;
+  // Deterministically simulate the zombie window: every non-leader identity
+  // read sees the workload as a just-exited, not-yet-reaped group member.
+  const runner = createManagedWorkloadRunner({
+    readIdentity(pid) {
+      const identity = readLinuxProcessIdentity(pid);
+      if (identity !== null && identity.processGroupId !== identity.pid) {
+        return { ...identity, state: "Z", live: false };
+      }
+      return identity;
+    },
+  });
+  const managed = await runner(workload(files, ["exit", "0"], {
+    mode: "survive-window",
+    timeoutMs: 2_000,
+  }), {
+    onStarted() { starts += 1; },
+  });
+  track(managed);
+
+  assert.equal(starts, 0);
+  assert.deepEqual(managed.readiness, {
+    reported: false,
+    errorCode: "MANAGED_WORKLOAD_NOT_LIVE",
+  });
+  assert.equal(managed.observation.terminalReason, "external-cancel");
+  assert.equal(managed.observation.cleanupComplete, true);
+  assert.equal(managed.cleanup.failureReason, null);
+  assert.equal(managed.cleanup.groupDrained, true);
+  assert.equal(managed.cleanup.outputDrained, true);
 });
 
 test("an unavailable group observation fails closed without claiming drain", {

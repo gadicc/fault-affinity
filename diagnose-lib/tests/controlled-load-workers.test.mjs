@@ -17,7 +17,10 @@ import {
   BundleExecutionLeaseError,
   withBundleExecutionLease,
 } from "../bundle-execution-lease.mjs";
-import { readLinuxProcessIdentity } from "../attempt-runner.mjs";
+import {
+  createManagedWorkloadRunner,
+  readLinuxProcessIdentity,
+} from "../attempt-runner.mjs";
 import {
   managedWorkloadResultBinding,
   parseManagedWorkloadResult,
@@ -175,6 +178,39 @@ test("a managed worker set verifies singleton readiness, boundaries, and complet
   const current = readLinuxProcessIdentity(result.process.workload.pid);
   assert.ok(current === null || !current.live ||
     current.startTicks !== result.process.workload.startTicks);
+});
+
+test("a zombie worker identity never starts a managed worker set", {
+  timeout: 10_000,
+}, async () => {
+  const resolved = workload(["exit", "0"]);
+  const cpu = allowedCpu();
+  let starts = 0;
+  // Deterministically simulate the zombie window: every non-leader identity
+  // read sees the worker as a just-exited, not-yet-reaped group member.
+  const zombieRunner = createManagedWorkloadRunner({
+    readIdentity(pid) {
+      const identity = readLinuxProcessIdentity(pid);
+      if (identity !== null && identity.processGroupId !== identity.pid) {
+        return { ...identity, state: "Z", live: false };
+      }
+      return identity;
+    },
+  });
+  const runManaged = (resolvedValue, options) => zombieRunner(resolvedValue, {
+    ...options,
+    onStarted(witness) {
+      starts += 1;
+      return options.onStarted(witness);
+    },
+  });
+  await assert.rejects(startControlledLoadWorkerSet({
+    resolved,
+    cpus: [cpu],
+    tasksetPath: "/usr/bin/taskset",
+    runManaged,
+  }), /did not reach complete readiness/);
+  assert.equal(starts, 0);
 });
 
 test("boundary drift invalidates the set and cancels the original worker", {

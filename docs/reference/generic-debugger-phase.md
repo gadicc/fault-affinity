@@ -68,10 +68,8 @@ executes one attempt under the established Node supervisor,
 typed outcomes, affinity and cleanup evidence, and durable artifact triples,
 and the [schema-3 manifest-v6 variant](../decisions/0031-schema3-manifest-v6-debugger.md)
 binds the debugger phase beside exact-CPU state under one exclusive lease.
+The public `debugger` command drives fresh, dry-run, and resume flows for v6
+bundles, and the read-only summary renders per-run typed outcomes.
 
-The remaining boundary is read-only debugger summary detail and public CLI
-support (Roadmap 6).
-
-Until those pieces exist, `capabilities.gdb` is a contract input rather than an
-advertised public phase. The historical `capture-fault.sh` and schema-2 GDB
-evidence remain separate.
+`capabilities.gdb` is now backed by a public phase. The historical
+`capture-fault.sh` and schema-2 GDB evidence remain separate.

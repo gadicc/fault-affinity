@@ -450,14 +450,21 @@ test("an HMAC-bound custom workload runs through the public command", async () =
 
   assert.equal(rc, 0, captured.stderr());
   assert.match(captured.stdout(), /complete: 1\/1 debugger runs/);
-  // Neither the private value nor any binding authority persists into the
-  // bundle files the CLI wrote.
+  // Neither the private value nor the binding key (in any deterministic
+  // representation) persists into the bundle files the CLI wrote.
+  const bindingKey = customWorkloadEnvironmentBindingKey(readFileSync(files.definition));
+  const keyHex = bindingKey.toString("hex");
+  const keyBase64 = bindingKey.toString("base64");
+  bindingKey.fill(0);
   const walk = (directoryWalk) => readdirSync(directoryWalk, { withFileTypes: true })
     .flatMap((entry) => entry.isDirectory()
       ? walk(path.join(directoryWalk, entry.name))
       : [path.join(directoryWalk, entry.name)]);
   for (const file of walk(bundleDir)) {
-    assert.ok(!readFileSync(file, "utf8").includes(secret), file);
+    const content = readFileSync(file, "utf8");
+    assert.ok(!content.includes(secret), file);
+    assert.ok(!content.includes(keyHex), file);
+    assert.ok(!content.includes(keyBase64), file);
   }
 });
 

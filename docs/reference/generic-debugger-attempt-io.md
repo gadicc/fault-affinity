@@ -54,10 +54,10 @@ transcript descriptor and prevents further access. A future complete-only
 store must consume the handle before disposal and must not publish overflowed,
 partial, or invalid input as a complete attempt.
 
-The [supervised adapter](generic-debugger-adapter.md) now connects the two
+The [supervised adapter](generic-debugger-adapter.md) connects the two
 channels to a real debugger launch: the adapter forwards the combined
 transcript and the private control descriptor through the established Node
 supervisor into this layer, and the [complete-only attempt store](generic-debugger-attempt-envelopes.md)
 consumes the capture handle and disposes it after durable publication. The
-remaining execution work is schema-3 bundle integration, summaries, and a
-public command.
+schema-3 manifest-v6 variant owns the phase under one bundle lease, and the
+public `debugger` command executes it.

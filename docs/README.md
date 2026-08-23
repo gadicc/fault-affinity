@@ -47,7 +47,7 @@ This index separates instructions for running the current tooling from the resul
 - [Understand controlled-load worker sets](reference/controlled-load-worker-sets.md): complete readiness, stable boundary identities, peer cancellation, and stop evidence
 - [Understand controlled-load A/B/A sessions](reference/controlled-load-aba-sessions.md): one target workload, complete B bracketing, and all-or-nothing session evidence
 - [Understand controlled-load phase storage](reference/controlled-load-phase-storage.md): complete-only no-clobber publication, manifest-v5 identity, and exclusive ownership
-- [Understand the generic debugger phase manifest](reference/generic-debugger-phase.md): workload binding, GDB provenance, fixed capture profile, and the remaining execution boundary
+- [Understand the generic debugger phase manifest](reference/generic-debugger-phase.md): workload binding, GDB provenance, fixed capture profile, and the execution boundary
 - [Understand the generic debugger control protocol](reference/generic-debugger-control.md): manifest-bound lifecycle records, strict sequencing, and separation from diagnostic output
 - [Understand bounded generic debugger attempt I/O](reference/generic-debugger-attempt-io.md): distinct channels, anonymous transcript retention, overflow evidence, and complete draining
 - [Understand the supervised generic debugger adapter](reference/generic-debugger-adapter.md): private launch package, last-moment provenance, and separate transcript/control routing under the Node supervisor

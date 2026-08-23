@@ -2,6 +2,10 @@
 
 Status: Accepted
 
+Follow-up: [ADR 0032](0032-public-debugger-command.md) fulfilled this
+decision's public-command and summary boundary; the manifest-v6 ownership
+semantics below are unchanged.
+
 ## Context
 
 The generic debugger stack now has a bound phase manifest (ADR 0026), a

@@ -24,7 +24,7 @@ The suite covers:
 - Workload-spec and catalog validation, including custom-file provenance
 - Public exact-CPU CLI parsing, dry-run safety, fresh bundle creation, and resume
 - Public baseline, CPU-group, pinned-concurrent, and controlled-load CLI planning, fresh bundle creation, and complete-unit resume
-- Read-only schema-3 v1-v5 summaries with phase, context, leg, CPU, and typed-outcome counts
+- Read-only schema-3 v1-v6 summaries with phase, context, leg, CPU, run, and typed-outcome counts
 - Generic debugger-phase manifest, materialized command-profile descriptor, structured control-protocol, bounded attempt-I/O validation, supervised adapter routing, complete-only attempt envelopes, and schema-3 manifest-v6 ownership without launching GDB
 - Public debugger command parsing, dry-run non-mutation, v6 creation, resume, capture/run caps, incomplete-attempt stops, interruption, lease-busy exit 75, HMAC-bound custom workloads, and per-run summary rendering with the fake debugger fixture
 - Internal shell-free attempt execution, deadlines, bounded output, and process-group cleanup
@@ -171,10 +171,11 @@ then resumes the sibling exact phase with the same auxiliary identity.
 
 The public summary command reuses the authoritative schema-3 reader and writes
 only text or versioned JSON to stdout. It never creates a bundle artifact. Unit
-fixtures cover every phase shape, and public integration tests summarize both
-exact-only and dual-workload version-5 bundles.
+fixtures cover every phase shape, and public integration tests summarize
+exact-only, dual-workload version-5, and debugger-focused version-6 bundles,
+including per-run typed debugger outcomes.
 
-The generic debugger foundation currently stops before process integration.
+The generic debugger stack is now complete through the public command.
 Its tests use a temporary inert executable and synthetic byte streams to cover
 workload capability, target signals, GDB provenance, schedule limits,
 canonical bindings, tamper rejection, pre-launch drift detection, record

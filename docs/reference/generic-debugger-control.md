@@ -59,9 +59,9 @@ The complete raw control bytes receive their own SHA-256 digest, byte count,
 and record count. A future envelope can bind those bytes without reparsing
 human-readable debugger output.
 
-## Remaining execution boundary
+## Execution boundary
 
-The [bounded attempt-I/O layer](generic-debugger-attempt-io.md) now retains the
+The [bounded attempt-I/O layer](generic-debugger-attempt-io.md) retains the
 control bytes separately from an anonymous, size-capped transcript while fully
 draining both inputs, the [materialized command profile](generic-debugger-phase.md)
 embeds a fixed Python profile that emits this protocol to a control descriptor
@@ -70,8 +70,8 @@ routes that descriptor separately from the combined transcript. Synthetic
 tests run the profile's gdb-free emission prelude under `python3` and validate
 the bytes with the real parser, and runner tests route a fake debugger's
 records through the full supervision stack.
-[Complete-only attempt envelopes](generic-debugger-attempt-envelopes.md) now
+[Complete-only attempt envelopes](generic-debugger-attempt-envelopes.md)
 combine adapter lifecycle, cleanup, control, and transcript facts into one
-durable record. The remaining work is schema-3 bundle integration, summaries,
-and a public command. Until those exist, the control protocol is an internal
-contract exercised only by synthetic tests.
+durable record. The schema-3 manifest-v6 variant owns the phase under one
+bundle lease, and the public `debugger` command executes it; the read-only
+summary renders per-run typed outcomes.
