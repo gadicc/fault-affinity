@@ -4,6 +4,7 @@ import {
   constants,
   lstatSync,
   mkdirSync,
+  readFileSync,
   realpathSync,
   statSync,
 } from "node:fs";
@@ -15,10 +16,15 @@ import {
   MAX_BASELINE_WAVES,
 } from "../../diagnose-lib/baseline-phase.mjs";
 import { buildControlledLoadSessionManifest } from "../../diagnose-lib/controlled-load-session.mjs";
+import {
+  DEBUGGER_MAX_RUNS,
+  buildDebuggerPhaseManifest,
+} from "../../diagnose-lib/debugger-phase.mjs";
 import { buildExactCpuPhaseManifest } from "../../diagnose-lib/exact-cpu-phase.mjs";
 import { buildGroupPhaseManifest } from "../../diagnose-lib/group-phase.mjs";
 import { buildPinnedConcurrentPhaseManifest } from "../../diagnose-lib/pinned-concurrent-phase.mjs";
 import {
+  MAX_CPU_ID,
   MAX_SCHEDULE_ENTRIES,
   MAX_SEED,
   compressCpuList,
@@ -30,15 +36,18 @@ import {
   buildSchema3BundleManifestV3,
   buildSchema3BundleManifestV4,
   buildSchema3BundleManifestV5,
+  buildSchema3BundleManifestV6,
   initializeSchema3Bundle,
   newSchema3BundleGeneration,
   readSchema3Bundle,
   runOneSchema3BaselineWave,
   runOneSchema3ControlledLoadSession,
+  runOneSchema3DebuggerAttempt,
   runOneSchema3ExactCpuAttempt,
   runOneSchema3GroupWave,
 } from "../../diagnose-lib/schema3-bundle.mjs";
 import {
+  customWorkloadEnvironmentBindingKey,
   listBuiltInWorkloads,
   resolveWorkloadSelection,
 } from "../../workloads/catalog.mjs";
@@ -54,6 +63,7 @@ import {
 const DEFAULT_TASKSET_PATH = "/usr/bin/taskset";
 const ZERO_GENERATION = "0".repeat(32);
 const MAX_PATH_BYTES = 16 * 1024;
+const DEBUGGER_RUN_TIMEOUT_MS = 120_000;
 
 const HELP = `Fault Affinity: bounded, resumable workload diagnostics
 
@@ -77,6 +87,10 @@ Usage:
     (--dry-run | --yes)
   fault-affinity controlled-load --resume DIR \\
     (--workload ID | --workload-file FILE) --condition-workload-file FILE --yes
+  fault-affinity debugger (--workload ID | --workload-file FILE) \\
+    --cpu N --max-runs N --max-captures N --debugger PATH --out-dir DIR \\
+    (--dry-run | --yes)
+  fault-affinity debugger --resume DIR (--workload ID | --workload-file FILE) --yes
   fault-affinity exact (--workload ID | --workload-file FILE) \\
     --cpus LIST [--rounds N] [--seed N] --out-dir DIR (--dry-run | --yes)
   fault-affinity exact --resume DIR (--workload ID | --workload-file FILE) \\
@@ -86,10 +100,15 @@ The baseline command creates schema-3 v2 bundles. The groups command creates
 v3 bundles from a bounded plan file. The pinned command creates v4 bundles that
 also bind controller-aware pinned-concurrent schedules. The controlled-load
 command creates the v5 A/B/A variant with separate measured and condition
-workloads. Phase commands can advance their matching state in later compatible
-bundle versions. The exact command also creates exact-only v1 bundles. Listing,
-inspection, summaries, and dry runs never execute a workload or create an
-evidence bundle. Every live run requires explicit workload selection and --yes.
+workloads. The debugger command creates the v6 debugger-focused exact-CPU
+variant with one pinned CPU and bounded run and capture counts. Phase commands
+can advance their matching state in later compatible bundle versions. The
+exact command also creates exact-only v1 bundles. Listing, inspection,
+summaries, and dry runs never execute a workload or create an evidence bundle.
+Every live run requires explicit workload selection and --yes.
+
+Debugger transcripts retain verbatim workload and debugger output, which can
+contain values the workload itself prints.
 `;
 
 export class FaultAffinityCliError extends Error {
@@ -216,6 +235,70 @@ export function parseFaultAffinityArgs(argv) {
         conditionWorkloadFile: options.conditionWorkloadFile,
       }),
       ...(options.json === undefined ? {} : { json: true }),
+    });
+  }
+  if (command === "debugger") {
+    const options = parseOptions(rest, new Map([
+      ["--workload", "workload"],
+      ["--workload-file", "workloadFile"],
+      ["--cpu", "cpuText"],
+      ["--max-runs", "maxRunsText"],
+      ["--max-captures", "maxCapturesText"],
+      ["--debugger", "debuggerPath"],
+      ["--out-dir", "outDir"],
+      ["--resume", "resumeDir"],
+      ["--taskset", "tasksetPath"],
+    ]), new Map([
+      ["--dry-run", "dryRun"], ["--yes", "yes"],
+      ["--help", "help"], ["-h", "help"],
+    ]));
+    if (options.help) return Object.freeze({ command, help: true });
+    const selection = selectionFrom(options);
+    if (options.resumeDir !== undefined) {
+      const fresh = [
+        "cpuText", "maxRunsText", "maxCapturesText", "debuggerPath", "outDir",
+        "tasksetPath",
+      ].filter((key) => options[key] !== undefined);
+      if (fresh.length > 0) {
+        fail("--resume cannot be combined with fresh debugger options");
+      }
+      if (!options.yes || options.dryRun) fail("a debugger resume requires --yes");
+      return Object.freeze({
+        command,
+        mode: "resume",
+        ...selection,
+        resumeDir: options.resumeDir,
+      });
+    }
+    for (const [key, label] of [
+      ["cpuText", "--cpu"],
+      ["maxRunsText", "--max-runs"],
+      ["maxCapturesText", "--max-captures"],
+      ["debuggerPath", "--debugger"],
+      ["outDir", "--out-dir"],
+    ]) {
+      if (options[key] === undefined) {
+        fail(`a fresh debugger run requires ${label}`);
+      }
+    }
+    if (Boolean(options.dryRun) === Boolean(options.yes)) {
+      fail("choose exactly one --dry-run or --yes for a fresh debugger run");
+    }
+    const maxRuns = parseCanonicalInteger(options.maxRunsText, "--max-runs", 1,
+      DEBUGGER_MAX_RUNS);
+    const maxCaptures = parseCanonicalInteger(options.maxCapturesText, "--max-captures",
+      1, DEBUGGER_MAX_RUNS);
+    if (maxCaptures > maxRuns) fail("--max-captures cannot exceed --max-runs");
+    return Object.freeze({
+      command,
+      mode: options.dryRun ? "dry-run" : "fresh",
+      ...selection,
+      cpu: parseCanonicalInteger(options.cpuText, "--cpu", 0, MAX_CPU_ID),
+      maxRuns,
+      maxCaptures,
+      debuggerPath: options.debuggerPath,
+      outDir: options.outDir,
+      tasksetPath: options.tasksetPath ?? DEFAULT_TASKSET_PATH,
     });
   }
   if (command === "exact") {
@@ -538,6 +621,7 @@ function renderWorkload(selection) {
     `CPU-group capability: ${summary.capabilities.groups ? "supported" : "unsupported"}`,
     `pinned-concurrent capability: ${summary.capabilities.pinnedConcurrent ? "supported" : "unsupported"}`,
     `exact-CPU capability: ${summary.capabilities.isolated ? "supported" : "unsupported"}`,
+    `debugger capability: ${summary.capabilities.gdb ? "supported" : "unsupported"}`,
     `workload digest: ${summary.digest}`,
     `warning: ${summary.liveWarning}`,
   ].join("\n");
@@ -597,6 +681,28 @@ function assertPinnedCapabilities(selection) {
     fail(`workload '${selection.resolved.id}' does not declare required pinned-suite ` +
       `capabilities: ${missing.join(", ")}`);
   }
+}
+
+function assertDebuggerCapabilities(selection) {
+  const missing = ["isolated", "gdb"].filter((capability) =>
+    selection.resolved.capabilities[capability] !== true);
+  if (missing.length > 0) {
+    fail(`workload '${selection.resolved.id}' does not declare required debugger ` +
+      `capabilities: ${missing.join(", ")}`);
+  }
+}
+
+// A custom HMAC-bound workload's environment binding authority derives from
+// its definition file bytes and stays process-local. The caller owns the
+// returned Buffer and clears it in a finally block after the live path ends.
+function debuggerEnvironmentBindingKey(selection) {
+  if (selection.resolved.environment.bindingMode !== "hmac-sha256") {
+    return undefined;
+  }
+  if (selection.source !== "custom-file" || selection.metadata.file === undefined) {
+    fail(`workload '${selection.resolved.id}' environment binding authority is unavailable`);
+  }
+  return customWorkloadEnvironmentBindingKey(readFileSync(selection.metadata.file));
 }
 
 function assertAutomationBoundary(selection) {
@@ -740,8 +846,33 @@ function buildFreshControlledLoadManifest(
   });
 }
 
-function installSignalForwarding(signalSource) {
-  const controller = new AbortController();
+function buildFreshDebuggerManifest(resolved, parsed, debuggerPath, tasksetPath, dryRun) {
+  const debuggerManifest = buildDebuggerPhaseManifest(resolved, {
+    generation: dryRun ? ZERO_GENERATION : generation(),
+    cpu: parsed.cpu,
+    maxRuns: parsed.maxRuns,
+    maxCaptures: parsed.maxCaptures,
+    debuggerPath,
+    tasksetPath,
+    runTimeoutMs: DEBUGGER_RUN_TIMEOUT_MS,
+    termGraceMs: 1_000,
+    killGraceMs: 2_000,
+  });
+  const exactCpuManifest = buildExactCpuPhaseManifest(resolved, {
+    generation: dryRun ? ZERO_GENERATION : generation(),
+    cpus: [parsed.cpu],
+    rounds: 1,
+    seed: 0,
+    tasksetPath,
+  });
+  return buildSchema3BundleManifestV6(resolved, {
+    bundleGeneration: dryRun ? ZERO_GENERATION : newSchema3BundleGeneration(),
+    debuggerManifest,
+    exactCpuManifest,
+  });
+}
+
+function installSignalForwarding(signalSource) {  const controller = new AbortController();
   let received = null;
   const handlers = new Map([
     ["SIGINT", () => { received ??= "SIGINT"; controller.abort(); }],
@@ -855,6 +986,55 @@ async function runControlledLoadBundle({
     writeOut(`complete: ${bundle.controlledLoad.progress.committedSessions}/` +
       `${bundle.controlledLoad.progress.totalSessions} controlled-load sessions in ` +
       `${bundleDir}\n`);
+    return 0;
+  } finally {
+    forwarding.remove();
+  }
+}
+
+async function runDebuggerBundle({
+  resolved,
+  bundleDir,
+  environmentBindingKey,
+  signalSource,
+  writeOut,
+  writeErr,
+}) {
+  const forwarding = installSignalForwarding(signalSource);
+  try {
+    let bundle = await readSchema3Bundle({ resolved, bundleDir });
+    if (bundle.debugger === undefined) {
+      fail("schema-3 bundle does not bind a debugger phase");
+    }
+    while (!bundle.debugger.progress.complete) {
+      if (forwarding.signal.aborted) return signalExitCode(forwarding.received());
+      const progress = bundle.debugger.progress;
+      writeOut(`run ${progress.committedRuns + 1}/${progress.maxRuns} ` +
+        `captures=${progress.capturedRuns}/${progress.maxCaptures}\n`);
+      const execution = await runOneSchema3DebuggerAttempt({
+        resolved,
+        bundleDir,
+        ...(environmentBindingKey === undefined ? {} : { environmentBindingKey }),
+        attemptOptions: { signal: forwarding.signal },
+      });
+      bundle = execution.bundle;
+      if (execution.result.committed) {
+        const outcome = execution.result.outcome;
+        writeOut(`committed run=${execution.result.run} outcome=${outcome.kind}` +
+          `${outcome.signal === undefined ? "" : ` signal=${outcome.signal}`}` +
+          `${outcome.kind === "captured"
+            ? ` target=${outcome.target ? "yes" : "no"}`
+            : ""}\n`);
+        continue;
+      }
+      if (forwarding.signal.aborted) return signalExitCode(forwarding.received());
+      if (execution.result.reason === "complete") break;
+      writeErr(`debugger attempt was not committed: ${execution.result.reason}\n`);
+      return 1;
+    }
+    const progress = bundle.debugger.progress;
+    writeOut(`complete: ${progress.committedRuns}/${progress.maxRuns} debugger runs ` +
+      `(${progress.capturedRuns}/${progress.maxCaptures} captures) in ${bundleDir}\n`);
     return 0;
   } finally {
     forwarding.remove();
@@ -1203,6 +1383,86 @@ export async function runFaultAffinityCli(argv, io = {}) {
         writeOut,
         writeErr,
       });
+    }
+    if (parsed.command === "debugger") {
+      assertDebuggerCapabilities(selection);
+      if (parsed.mode !== "dry-run") assertAutomationBoundary(selection);
+      if (parsed.mode === "dry-run") {
+        const debuggerPath = resolveExecutablePath(parsed.debuggerPath, "--debugger");
+        const tasksetPath = resolveExecutablePath(parsed.tasksetPath, "--taskset");
+        const allowedCpuSpec = ensureAllowedCpus([parsed.cpu]);
+        const manifest = buildFreshDebuggerManifest(
+          selection.resolved,
+          parsed,
+          debuggerPath,
+          tasksetPath,
+          true,
+        );
+        const schedule = manifest.debugger.manifest.schedule;
+        writeOut(`${renderWorkload(selection)}\n`);
+        writeOut(`plan: debugger CPU ${parsed.cpu}; ${schedule.maxRuns} run(s); ` +
+          `${schedule.maxCaptures} capture(s)\n`);
+        writeOut(`debugger: ${debuggerPath} sha256=` +
+          `${manifest.debugger.manifest.debugger.executable.sha256}\n`);
+        writeOut(`bound exact: CPU ${parsed.cpu}; 1 round(s); 1 attempt(s)\n`);
+        writeOut(`host allowance: ${allowedCpuSpec}\n`);
+        writeOut(`planned bundle: ${path.resolve(cwd, parsed.outDir)}\n`);
+        writeOut("warning: debugger transcripts retain verbatim workload output, " +
+          "which can include printed values\n");
+        writeOut("dry run: no workload executed and no bundle created\n");
+        return 0;
+      }
+      const environmentBindingKey = debuggerEnvironmentBindingKey(selection);
+      try {
+        if (parsed.mode === "resume") {
+          const bundleDir = resolveExistingBundleDirectory(path.resolve(cwd, parsed.resumeDir));
+          writeOut(`resuming debugger workload=${selection.resolved.id} ` +
+            `bundle=${bundleDir}\n`);
+          writeOut(`warning: ${selection.metadata.liveWarning}\n`);
+          return await runDebuggerBundle({
+            resolved: selection.resolved,
+            bundleDir,
+            environmentBindingKey,
+            signalSource,
+            writeOut,
+            writeErr,
+          });
+        }
+        const debuggerPath = resolveExecutablePath(parsed.debuggerPath, "--debugger");
+        const tasksetPath = resolveExecutablePath(parsed.tasksetPath, "--taskset");
+        ensureAllowedCpus([parsed.cpu]);
+        const manifest = buildFreshDebuggerManifest(
+          selection.resolved,
+          parsed,
+          debuggerPath,
+          tasksetPath,
+          false,
+        );
+        const bundleDir = createPrivateBundleDirectory(path.resolve(cwd, parsed.outDir));
+        await initializeSchema3Bundle({
+          resolved: selection.resolved,
+          manifest,
+          bundleDir,
+        });
+        writeOut(`starting debugger workload=${selection.resolved.id} ` +
+          `risk=${selection.resolved.risk} runs=${parsed.maxRuns} ` +
+          `captures=${parsed.maxCaptures} bundle=${bundleDir}\n`);
+        writeOut(`warning: ${selection.metadata.liveWarning}\n`);
+        writeOut("warning: debugger transcripts retain verbatim workload output, " +
+          "which can include printed values\n");
+        return await runDebuggerBundle({
+          resolved: selection.resolved,
+          bundleDir,
+          environmentBindingKey,
+          signalSource,
+          writeOut,
+          writeErr,
+        });
+      } finally {
+        // The caller-owned environment binding authority never survives the
+        // live path; clear it whether the run completes, fails, or is cancelled.
+        environmentBindingKey?.fill(0);
+      }
     }
     if (parsed.command === "groups") {
       assertGroupCapabilities(selection);

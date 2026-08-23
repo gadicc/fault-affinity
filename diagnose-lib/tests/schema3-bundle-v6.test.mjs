@@ -260,6 +260,8 @@ test("initialization creates exactly the v6 state directories and rereads idempo
     scheduled: 4,
     captured: 0,
     maxCaptures: 2,
+    outcomes: [],
+    runs: [],
   });
 });
 

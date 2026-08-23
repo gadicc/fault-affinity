@@ -121,6 +121,12 @@ switch (mode) {
   case "garbage-control":
     writeFd(3, "this is not a canonical control record\n");
     break;
+  case "hold":
+    // Writes a transcript marker and then holds forever with no control
+    // records, so tests can interrupt the supervised attempt mid-flight.
+    writeFd(1, "FAKE_DEBUGGER_HOLD\n");
+    setInterval(() => {}, 1_000);
+    break;
   default:
     throw new Error(`unknown fake debugger mode: ${mode}`);
 }

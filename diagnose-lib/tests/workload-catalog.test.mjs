@@ -75,6 +75,8 @@ test("the built-in catalog is descriptive and resolves without executing a workl
     "wasm-churn-suite",
     "node-pglite",
     "node-pglite-suite",
+    "wasm-churn-debugger",
+    "node-pglite-debugger",
   ]);
   assert.equal(listed[0].recommended, true);
   assert.equal(listed[2].risk, "high-memory");
@@ -93,6 +95,22 @@ test("the built-in catalog is descriptive and resolves without executing a workl
   assert.equal(suite.resolved.capabilities.isolated, true);
   assert.equal(suite.resolved.capabilities.pinnedConcurrent, true);
   assert.notEqual(suite.resolved.digest, selected.resolved.digest);
+
+  const wasmDebugger = resolveBuiltInWorkload("wasm-churn-debugger");
+  assert.equal(wasmDebugger.resolved.capabilities.gdb, true);
+  assert.equal(wasmDebugger.resolved.capabilities.isolated, true);
+  assert.equal(wasmDebugger.resolved.attempt.mode, "exit");
+  assert.equal(wasmDebugger.resolved.command.args[0].endsWith("mini-wasm-finite.mjs"),
+    true);
+  assert.notEqual(wasmDebugger.resolved.digest, selected.resolved.digest);
+
+  const pgliteDebugger = resolveBuiltInWorkload("node-pglite-debugger");
+  assert.equal(pgliteDebugger.resolved.capabilities.gdb, true);
+  assert.equal(pgliteDebugger.resolved.capabilities.isolated, true);
+  assert.equal(pgliteDebugger.resolved.attempt.mode, "exit");
+  assert.equal(pgliteDebugger.resolved.command.args[0].endsWith("child.mjs"), true);
+  assert.notEqual(pgliteDebugger.resolved.digest,
+    resolveBuiltInWorkload("node-pglite").resolved.digest);
 });
 
 test("custom files resolve relative paths and bind definition, environment, and provenance", () => {

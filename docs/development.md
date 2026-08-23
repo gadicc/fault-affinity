@@ -26,6 +26,7 @@ The suite covers:
 - Public baseline, CPU-group, pinned-concurrent, and controlled-load CLI planning, fresh bundle creation, and complete-unit resume
 - Read-only schema-3 v1-v5 summaries with phase, context, leg, CPU, and typed-outcome counts
 - Generic debugger-phase manifest, materialized command-profile descriptor, structured control-protocol, bounded attempt-I/O validation, supervised adapter routing, complete-only attempt envelopes, and schema-3 manifest-v6 ownership without launching GDB
+- Public debugger command parsing, dry-run non-mutation, v6 creation, resume, capture/run caps, incomplete-attempt stops, interruption, lease-busy exit 75, HMAC-bound custom workloads, and per-run summary rendering with the fake debugger fixture
 - Internal shell-free attempt execution, deadlines, bounded output, and process-group cleanup
 - Managed auxiliary-workload readiness, discarded output, and bounded cancellation
 - Controlled-load worker-set readiness, boundary identity checks, peer cancellation, and stop evidence

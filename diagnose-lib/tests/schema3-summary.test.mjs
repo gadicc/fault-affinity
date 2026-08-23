@@ -16,6 +16,10 @@ function identity(id) {
   };
 }
 
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function evidence(category = "pass", label = "exit-zero") {
   return { outcome: { validOutcome: true, category, label } };
 }
@@ -172,6 +176,25 @@ test("a version-6 summary inspects the debugger phase progress", () => {
   const bundle = {
     ...baseBundle(6),
     debugger: {
+      attempts: [
+        {
+          run: 1,
+          envelope: {
+            run: 1,
+            outcome: {
+              kind: "captured",
+              signal: "SIGSEGV",
+              target: true,
+              sections: ["stop", "backtrace", "registers", "instructions", "threads",
+                "mappings"],
+            },
+          },
+        },
+        {
+          run: 2,
+          envelope: { run: 2, outcome: { kind: "clean" } },
+        },
+      ],
       progress: {
         status: "incomplete",
         complete: false,
@@ -184,18 +207,28 @@ test("a version-6 summary inspects the debugger phase progress", () => {
     exactCpu: exactPhase([]),
   };
   const summary = buildSchema3BundleSummary(bundle);
-  assert.deepEqual(summary.phases.debugger, {
-    status: "incomplete",
-    complete: false,
-    committed: 2,
-    scheduled: 4,
-    captured: 1,
-    maxCaptures: 2,
-  });
+  assert.equal(summary.phases.debugger.status, "incomplete");
+  assert.equal(summary.phases.debugger.committed, 2);
+  assert.equal(summary.phases.debugger.scheduled, 4);
+  assert.equal(summary.phases.debugger.captured, 1);
+  assert.deepEqual(summary.phases.debugger.outcomes,
+    [{ kind: "captured", count: 1 }, { kind: "clean", count: 1 }]);
+  assert.equal(summary.phases.debugger.runs.length, 2);
+  assert.equal(summary.phases.debugger.runs[0].outcome.kind, "captured");
+  assert.equal(summary.phases.debugger.runs[1].outcome.kind, "clean");
+  assert.equal(summary.phases.debugger.runs[0].artifacts.transcript,
+    "state/debugger/debugger-attempt-000000001-transcript");
   assert.equal(summary.conditionWorkload, undefined);
   const text = renderSchema3BundleSummary(summary);
   assert.match(text, /manifest v6/);
   assert.match(text, /debugger: incomplete; 2\/4 runs; captured 1\/2/);
+  assert.match(text, /run 1: captured signal=SIGSEGV target=yes/);
+  assert.match(text, /run 2: clean/);
+
+  const unreconciled = clone(bundle);
+  unreconciled.debugger.progress.capturedRuns = 0;
+  assert.throws(() => buildSchema3BundleSummary(unreconciled),
+    /do not reconcile with progress/);
 });
 
 test("debugger summaries require the v6 phase and reconcile its progress", () => {

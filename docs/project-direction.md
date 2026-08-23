@@ -107,7 +107,14 @@ variant that binds measured and auxiliary workload identities, exact-CPU state,
 and one complete A1/B/A2 store. Version 6 is a separate debugger-focused
 exact-CPU variant that binds one isolated-plus-gdb workload, the exact-CPU
 phase, and the debugger phase with `state/exact-cpu` and `state/debugger`
-ownership; controlled-load composition is deferred to a later version.
+ownership; controlled-load composition is deferred to a later version. The
+public `debugger` command drives fresh, dry-run, and resume flows for v6
+bundles with explicit selection, explicit live confirmation, allowed-CPU
+validation, bounded run/capture settings, lease-busy exit 75, and typed
+nonzero stops on operationally invalid attempts. The debugger-capable
+built-ins are the finite `wasm-churn-debugger` and `node-pglite-debugger`
+profiles; native churn stays outside the debugger built-ins. The read-only
+summary renders per-run typed debugger outcomes for v6 bundles.
 The owner holds one exclusive lease across selecting, running, and committing
 an exact attempt, complete baseline/group/pinned-concurrent wave, or complete
 controlled-load session and derives completion from durable publication. Its

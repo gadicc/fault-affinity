@@ -25,8 +25,8 @@ mkdir -p "$DIAG_TEST_HERMETIC_BIN"
 cat > "$DIAG_TEST_HERMETIC_BIN/node" << 'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
-  repro.mjs | child.mjs | mini-wasm.mjs | mini-wasm-churn.mjs | \
-  */repro.mjs | */child.mjs | */mini-wasm.mjs | */mini-wasm-churn.mjs)
+  repro.mjs | child.mjs | mini-wasm.mjs | mini-wasm-churn.mjs | mini-wasm-finite.mjs | \
+  */repro.mjs | */child.mjs | */mini-wasm.mjs | */mini-wasm-churn.mjs | */mini-wasm-finite.mjs)
     printf 'test harness refused workload entrypoint: %s\n' "$1" >&2
     exit 97
     ;;

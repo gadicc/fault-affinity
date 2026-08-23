@@ -70,6 +70,8 @@ function progress(value, unit) {
   };
 }
 
+const DEBUGGER_OUTCOME_KINDS = new Set(["clean", "exited", "signaled", "captured", "error"]);
+
 function notBound() {
   return { status: "not-bound", complete: false };
 }
@@ -198,6 +200,42 @@ function debuggerSummary(phase) {
   if (value.complete !== complete || value.status !== status) {
     fail("debugger progress does not reconcile");
   }
+  // Per-run detail is reconciled from the committed envelopes, never from
+  // the progress counters alone.
+  if (!Array.isArray(phase.attempts)) fail("debugger attempts are invalid");
+  const runs = phase.attempts.map((attempt, index) => {
+    if (attempt === null || typeof attempt !== "object" || Array.isArray(attempt) ||
+        !Number.isSafeInteger(attempt.run) || attempt.run !== index + 1 ||
+        attempt.envelope === null || typeof attempt.envelope !== "object" ||
+        attempt.envelope.run !== attempt.run) {
+      fail("debugger attempt list is invalid");
+    }
+    const outcome = attempt.envelope.outcome;
+    if (outcome === null || typeof outcome !== "object" || Array.isArray(outcome) ||
+        !DEBUGGER_OUTCOME_KINDS.has(outcome.kind)) {
+      fail("debugger attempt outcome is invalid");
+    }
+    const stem = `state/debugger/debugger-attempt-${String(attempt.run).padStart(9, "0")}`;
+    return {
+      run: attempt.run,
+      outcome,
+      artifacts: {
+        transcript: `${stem}-transcript`,
+        control: `${stem}-control`,
+      },
+    };
+  });
+  if (runs.length !== value.committedRuns ||
+      runs.filter((run) => run.outcome.kind === "captured").length !== value.capturedRuns) {
+    fail("debugger committed envelopes do not reconcile with progress");
+  }
+  const counts = new Map();
+  for (const run of runs) {
+    counts.set(run.outcome.kind, (counts.get(run.outcome.kind) ?? 0) + 1);
+  }
+  const outcomes = [...counts.entries()]
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([kind, count]) => ({ kind, count }));
   return {
     status: value.status,
     complete: value.complete,
@@ -205,6 +243,8 @@ function debuggerSummary(phase) {
     scheduled: value.maxRuns,
     captured: value.capturedRuns,
     maxCaptures: value.maxCaptures,
+    outcomes,
+    runs,
   };
 }
 
@@ -300,6 +340,15 @@ export function renderSchema3BundleSummary(summary) {
   lines.push(`debugger: ${progressText(debuggerPhase, "runs")}` +
     `${debuggerPhase.status === "not-bound"
       ? "" : `; captured ${debuggerPhase.captured}/${debuggerPhase.maxCaptures}`}`);
+  for (const run of debuggerPhase.runs ?? []) {
+    lines.push(`  run ${run.run}: ${run.outcome.kind}` +
+      `${run.outcome.signal === undefined ? "" : ` signal=${run.outcome.signal}`}` +
+      `${run.outcome.kind === "captured"
+        ? ` target=${run.outcome.target ? "yes" : "no"}`
+        : ""}` +
+      `${run.outcome.exitCode === undefined ? "" : ` exit=${run.outcome.exitCode}`}` +
+      `${run.outcome.code === undefined ? "" : ` error=${run.outcome.code}`}`);
+  }
   lines.push(`exact-CPU: ${progressText(exactCpu, "attempts")}; ` +
     `outcomes ${outcomesText(exactCpu.outcomes)}`);
   for (const cpu of exactCpu.cpus) {

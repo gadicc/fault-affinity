@@ -46,6 +46,35 @@ function wasmChurnSpec({ id, label, capabilities }) {
   };
 }
 
+function wasmChurnDebuggerSpec({ id, label, capabilities }) {
+  const script = path.join(REPOSITORY_ROOT, "mini-wasm-finite.mjs");
+  return {
+    version: 1,
+    id,
+    label,
+    description: "Dependency-free finite reduced WebAssembly module lifecycle churn trigger.",
+    risk: "standard",
+    command: {
+      executable: process.execPath,
+      args: [script, "200", "200000", "1000"],
+      cwd: REPOSITORY_ROOT,
+    },
+    environment: {},
+    attempt: {
+      mode: "exit",
+      timeoutMs: 30_000,
+      termGraceMs: 500,
+      killGraceMs: 1_000,
+    },
+    outcomes: {
+      targetSignals: ["SIGSEGV"],
+      mappedExits: [{ code: 43, category: "corruption", label: "data-mismatch" }],
+    },
+    capabilities,
+    provenance: { completeness: "complete", files: [script] },
+  };
+}
+
 function nodePgliteSpec({ id, label, capabilities }) {
   const child = path.join(REPOSITORY_ROOT, "child.mjs");
   const packageJson = path.join(REPOSITORY_ROOT, "package.json");
@@ -145,6 +174,36 @@ const BUILT_INS = Object.freeze({
           isolated: true,
           pinnedConcurrent: true,
         },
+      });
+    },
+  }),
+  "wasm-churn-debugger": Object.freeze({
+    id: "wasm-churn-debugger",
+    label: "WebAssembly finite churn debugger profile",
+    recommended: false,
+    role: "Reduced finite WebAssembly churn trigger for debugger capture",
+    risk: "standard",
+    liveWarning: "Compiles, instantiates, and executes fresh WebAssembly modules for a bounded number of rounds; debugger transcripts retain workload output verbatim.",
+    buildSpec() {
+      return wasmChurnDebuggerSpec({
+        id: "wasm-churn-debugger",
+        label: "WebAssembly finite churn debugger profile",
+        capabilities: { isolated: true, gdb: true },
+      });
+    },
+  }),
+  "node-pglite-debugger": Object.freeze({
+    id: "node-pglite-debugger",
+    label: "Node/PGlite historical debugger profile",
+    recommended: false,
+    role: "Historical heavyweight application-derived trigger for debugger capture",
+    risk: "high-memory",
+    liveWarning: "One PGlite client can use about 1.2 GiB and debugger transcripts retain workload output verbatim; run npm ci before selecting this workload.",
+    buildSpec() {
+      return nodePgliteSpec({
+        id: "node-pglite-debugger",
+        label: "Node/PGlite historical debugger profile",
+        capabilities: { isolated: true, gdb: true },
       });
     },
   }),
