@@ -205,3 +205,7 @@ The v7 report does not claim to replace the legacy suite's telemetry, debugger
 transcripts, frequency evidence, or privacy-review inventory. Historical
 schema-1/schema-2 interpretation, Node A/B/A and warmup matrices, and the
 privileged recovery namespace remain unchanged.
+
+See the [optional roadmap](roadmap.md) for relative value and difficulty
+ratings, distribution and AI-guidance options, implementation boundaries, and
+the conditions that would justify each extension.

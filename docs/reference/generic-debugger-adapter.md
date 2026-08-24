@@ -2,8 +2,9 @@
 
 The internal debugger attempt runner executes one generic debugger attempt
 under the established Node process-group supervisor. It never launches GDB
-directly, never uses the historical shell supervisor, and adds no public
-command, attempt envelope, or durable bundle artifact.
+directly or uses the historical shell supervisor. The public `debugger`
+command composes this layer with complete-only envelopes and durable v6 bundle
+state; the adapter itself does not own those boundaries.
 
 ## Layer the responsibilities
 
@@ -43,10 +44,11 @@ spec.
 
 ## Revalidate provenance at the last moment
 
-The adapter trusts nothing it receives: it resolves the workload from the
-delivered spec, validates the manifest against that resolution, rebuilds the
-fixed command descriptor, and revalidates the target and debugger executables
-immediately before spawning GDB. A drifted target or debugger stops the
+The adapter trusts nothing it receives: it validates the delivered launch
+capsule as its sole workload authority, validates the manifest against that
+resolved identity, rebuilds the fixed command descriptor, and revalidates the
+target and debugger executables immediately before spawning GDB. It never
+re-resolves a workload specification. A drifted target or debugger stops the
 attempt with a typed single-line transcript record and a nonzero adapter exit
 before any debugger process exists.
 

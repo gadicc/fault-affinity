@@ -1,11 +1,12 @@
 # Understand complete-only generic debugger attempt envelopes
 
-The internal debugger attempt envelope is the canonical per-attempt record
-for a future schema-3 debugger phase. It is built from one
+The debugger attempt envelope is the canonical per-attempt record for the
+schema-3 manifest-v6 debugger phase. It is built from one
 [supervised adapter](generic-debugger-adapter.md) attempt and exists only
 when that attempt is complete. A companion store publishes each attempt's
-artifacts durably. Nothing here creates bundle state or adds a public
-command.
+artifacts durably. The envelope module itself does not own bundle creation or
+public command orchestration; those are supplied by the v6 bundle owner and
+the public `debugger` command.
 
 ## Bind one attempt completely
 

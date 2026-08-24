@@ -1,8 +1,10 @@
 # Understand internal attempt records
 
 Attempt-record version 1 is the internal evidence boundary between the generic
-workload runner and future phase envelopes. No current `diagnose.sh` phase
-writes this format, and legacy schema-1 or schema-2 bundles must not acquire it.
+workload runner and schema-3 phase envelopes. The public generic exact,
+baseline, group, pinned, controlled-load, debugger, and combined campaign
+workflows consume it through their owning formats. The legacy `diagnose.sh`
+phases do not write it, and schema-1 or schema-2 bundles must not acquire it.
 
 ## Bind one resolved workload
 

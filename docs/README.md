@@ -5,6 +5,7 @@ This index separates instructions for running the current tooling from the resul
 ## Understand the project
 
 - [Project direction](project-direction.md): scope, public identity, retained workloads, and migration boundaries
+- [Optional roadmap](roadmap.md): scored distribution, guided-operation, evidence-protocol, and supervision extensions
 - [Repository README](../README.md): safety, current commands, findings summary, and entry points
 
 ## Run the current tools

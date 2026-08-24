@@ -1,8 +1,9 @@
 # Understand bounded generic debugger attempt I/O
 
-The internal debugger-attempt I/O layer captures synthetic byte streams today.
-It does not start GDB, run a workload, create phase state, or add a public
-command.
+The debugger-attempt I/O layer captures the two byte streams from each
+supervised public debugger attempt. It is also independently testable with
+synthetic streams. The I/O layer does not itself start GDB, run a workload, or
+create phase state.
 
 ## Keep two exact channels
 
@@ -21,7 +22,7 @@ Control bytes remain in bounded memory.
 
 Both channels run concurrently. At the bound, the collector stops retaining
 new bytes but continues reading and hashing accepted chunks until the input
-ends. This gives later process supervision a complete drain witness without
+ends. This gives the supervising process stack a complete drain witness without
 allowing retained evidence to grow past its manifest limit.
 
 Each channel reports:
@@ -50,9 +51,9 @@ debugger outcome rather than an I/O failure.
 
 The returned capture handle reads the anonymous transcript in bounded chunks
 and returns copies of the control bytes. Disposing the handle closes the final
-transcript descriptor and prevents further access. A future complete-only
-store must consume the handle before disposal and must not publish overflowed,
-partial, or invalid input as a complete attempt.
+transcript descriptor and prevents further access. The complete-only store
+consumes the handle before disposal and refuses to publish overflowed, partial,
+or invalid input as a complete attempt.
 
 The [supervised adapter](generic-debugger-adapter.md) connects the two
 channels to a real debugger launch: the adapter forwards the combined

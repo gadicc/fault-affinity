@@ -1,8 +1,9 @@
 # Understand the generic debugger phase manifest
 
-The internal debugger-phase manifest is the first compatibility boundary for a
-future schema-3 GDB capture. It describes exactly what a debugger phase would
-run, but it does not execute GDB or create durable phase state.
+The debugger-phase manifest is the compatibility boundary for schema-3
+manifest-v6 GDB capture. It describes exactly what the public `debugger`
+workflow will run, while execution and durable phase state remain the
+responsibility of the supervised runner and phase store.
 
 ## Bind one workload and target-signal policy
 
@@ -55,8 +56,8 @@ path, byte count, mode, and full SHA-256 digest. It also binds one target CPU,
 maximum run and capture counts, singleton-affinity mode, `taskset` path,
 per-run timeout, and cleanup grace intervals.
 
-Stored parsing is intentionally filesystem-independent. Immediately before a
-future launch, the runner must re-open and hash the recorded GDB path and refuse
+Stored parsing is intentionally filesystem-independent. Immediately before
+each launch, the runner re-opens and hashes the recorded GDB path and refuses
 execution if it differs. The target workload has its own equivalent launch
 provenance check.
 

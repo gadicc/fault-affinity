@@ -186,6 +186,7 @@ rename the historical privileged recovery namespace. See
 
 - [Documentation map](docs/README.md)
 - [Project direction](docs/project-direction.md)
+- [Optional roadmap](docs/roadmap.md)
 - [Interpret experimental results](docs/concepts/interpreting-results.md)
 - [Develop and test the tooling](docs/development.md)
 

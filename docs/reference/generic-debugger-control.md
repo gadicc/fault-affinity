@@ -1,9 +1,10 @@
 # Understand the generic debugger control protocol
 
-The internal debugger control protocol is a small machine-readable evidence
-stream for a future generic GDB runner. It validates synthetic records today;
-it does not start GDB, run a workload, create phase state, or add a public
-command.
+The debugger control protocol is the small machine-readable evidence stream
+emitted by the manifest-bound GDB command profile and parsed separately from
+human-readable output. The public `debugger` workflow uses it for every
+attempt. The protocol module remains independently testable with synthetic
+records and does not itself start GDB or create phase state.
 
 ## Keep control separate from diagnostic output
 
@@ -51,13 +52,13 @@ The parsed result keeps four facts separate:
 - a structured operational error, when launch, observation, or capture failed.
 
 For example, a stopped signal followed by a capture error retains the stopped
-signal and separately records the capture error. Later outcome classification
-can therefore report what happened without claiming that a complete transcript
-was captured.
+signal and separately records the capture error. Outcome classification can
+therefore report what happened without claiming that a complete transcript was
+captured.
 
 The complete raw control bytes receive their own SHA-256 digest, byte count,
-and record count. A future envelope can bind those bytes without reparsing
-human-readable debugger output.
+and record count. The complete-only attempt envelope binds those bytes without
+reparsing human-readable debugger output.
 
 ## Execution boundary
 
