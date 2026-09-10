@@ -6,6 +6,7 @@ This index separates instructions for running the current tooling from the resul
 
 - [Project direction](project-direction.md): scope, public identity, retained workloads, and migration boundaries
 - [Optional roadmap](roadmap.md): scored distribution, guided-operation, evidence-protocol, and supervision extensions
+- [Distribution and release plan](distribution-and-release-plan.md): pinned reference runtimes, live-Ubuntu and Windows kits, GitHub Pages bootstrap, result handoff, and promotion releases
 - [Repository README](../README.md): safety, current commands, findings summary, and entry points
 
 ## Run the current tools

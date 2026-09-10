@@ -31,6 +31,12 @@ does not need to be resumed or converted into a complete report to be retained.
 
 ## Evaluate distribution and guided operation
 
+The accepted implementation sequence for the live-Ubuntu reference kit,
+Windows screening ZIP, GitHub Pages bootstrap, result handoff, and automated
+promotion releases is recorded in the
+[distribution and release plan](distribution-and-release-plan.md). The scores
+below remain useful for evaluating later expansion beyond that bounded plan.
+
 | Candidate | Value | Difficulty | Recommendation |
 | --- | ---: | ---: | --- |
 | Repository-hosted AI operator skill | 4 | 2 | Best next usability experiment |
