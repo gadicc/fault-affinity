@@ -188,6 +188,29 @@ protocol only when those CPUs are online and allowed. The launcher must print
 that they are case-study defaults, validate them before execution, and accept
 explicit overrides. It must not imply that CPU 19 is generally suspect.
 
+This fixed profile is a known-target confirmation protocol, not the only
+public entry point for a machine being investigated from scratch. Add a
+separately versioned guided discovery flow before presenting the kit as a
+general Windows-user diagnostic:
+
+1. Run a bounded pinned Node 25.2.1/PGlite localization campaign across the
+   usable CPUs, reusing the generic topology, supervision, and exact-phase
+   machinery rather than creating another scheduler.
+2. Report candidate CPUs descriptively using a prespecified ranking and
+   deterministic tie-break. Say “highest observed fault rate,” never “bad CPU,”
+   and produce no candidate when the valid evidence is insufficient.
+3. Show the proposed controller, target, and topology-informed load CPUs, then
+   require a fresh dry run and explicit operator confirmation.
+4. Create a new, immutable A1/B/A2 result profile for that selected plan. Do
+   not pool exploratory localization samples into the confirmatory comparison
+   or silently launch A/B/A from the discovery result.
+
+Keep the fixed CPU-19 profile available under its case-study identity for
+pre/post-RMA and exact cross-machine comparisons. The adaptive flow must use a
+different profile ID, record the discovery-bundle binding and selection rule,
+and explain that different selected CPUs answer a broader screening question
+than the fixed case-study protocol.
+
 Omit the native C payload from the first public kit. The current
 `repro-c-aba.sh` still depends on a host compiler and emits a simpler result,
 while the raw `repro-c` binary can start a live workload immediately and also
@@ -538,6 +561,9 @@ dry run from a fresh live session, and offline download remains available.
 ### Milestone 3: independent use and runtime comparison
 
 - Collect feedback from the first independent Linux operators.
+- Package the separately versioned discovery/localization flow and its reviewed
+  handoff into a fresh confirmatory A/B/A plan before calling the kit a general
+  start-from-scratch diagnostic.
 - Add the optional host-runtime and reverse-paired comparison launchers only
   after the fixed reference path is understood.
 - Publish a privacy-reviewed summary of the motivating local sessions and the
