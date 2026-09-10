@@ -148,6 +148,22 @@ Use [run the legacy diagnostic suite](docs/guides/run-diagnostics.md) before a
 live collection. Legacy controlled-load modes are documented separately in
 [controlled-load experiments](docs/guides/controlled-load-experiments.md).
 
+## Zero-install Ubuntu reference kit
+
+The first distribution target is a self-contained Linux x86-64 kit for an
+official Ubuntu Desktop live session. It pins both the controller and reference
+Node runtimes, PGlite, and the A/B/A schedule, so a Windows user can collect a
+fixed known-target result without installing Node, npm, Git, or a compiler on
+Windows. It is not yet the general start-from-scratch discovery workflow.
+The bootstrap only downloads and verifies the kit; running the workload still
+requires a separate, explicit `--yes` confirmation.
+
+Public release publication is deliberately disabled until live-session,
+recovery, and repository-protection acceptance gates are complete. See
+[use the Ubuntu live reference kit](docs/live-kit.md) for the operator workflow
+and [the distribution and release plan](docs/distribution-and-release-plan.md)
+for the rollout and later native-Windows screening design.
+
 ## Case-study findings
 
 The checked-in measurements describe one affected Dell Pro Max 18 Plus with a

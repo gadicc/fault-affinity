@@ -1,0 +1,84 @@
+name: GitHub Pages
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Pages bootstrap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Validate bootstrap fixtures
+        run: site/tests/run-tests.sh
+
+  build:
+    name: Stage Pages
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Stage public files
+        run: |
+          mkdir -p "$RUNNER_TEMP/pages"
+          install -m 0644 site/index.html "$RUNNER_TEMP/pages/index.html"
+          install -m 0644 site/run "$RUNNER_TEMP/pages/run"
+          install -m 0644 site/.nojekyll "$RUNNER_TEMP/pages/.nojekyll"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ runner.temp }}/pages
+
+  deploy:
+    name: Deploy Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -11,6 +11,7 @@ This index separates instructions for running the current tooling from the resul
 
 ## Run the current tools
 
+- [Use the Ubuntu live reference kit](live-kit.md): zero-install verified download, dry-run-first A/B/A reference collection, persistent result storage, and USB or browser-assisted result handoff
 - [Run a generic diagnostic campaign](guides/generic-diagnose-campaign.md): automatic topology planning, built-in reduced and historical recipes, schema-3 v7 resume, every-CPU localization, focused load, and final statistical reports
 - [Run a generic exact-CPU workload](guides/generic-exact-cpu.md): built-in and custom workload selection, dry runs, live execution, and schema-3 resume
 - [Run generic baseline waves](guides/generic-baseline.md): correlated-wave planning, schema-3 v2 creation, resume, and its bound exact phase

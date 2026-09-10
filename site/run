@@ -1,0 +1,517 @@
+#!/bin/sh
+# fault-affinity live-kit bootstrap
+# Downloads one pinned GitHub Release, verifies it, inspects its archive, and
+# extracts it. This script never starts the live workload.
+set -eu
+
+umask 077
+PATH=/usr/bin:/bin
+export PATH
+
+for name in \
+  LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG \
+  PYTHONHOME PYTHONPATH PYTHONINSPECT PYTHONSTARTUP PYTHONBREAKPOINT PYTHONUSERBASE
+do
+  eval "present=\${${name}+yes}"
+  if [ "${present:-}" = yes ]; then
+    echo "error: refusing injection-capable environment variable: $name" >&2
+    exit 1
+  fi
+done
+
+project_repository="gadicc/fault-affinity"
+asset_name="fault-affinity-live-linux-x64.tar.gz"
+requested_version=""
+
+usage() {
+  cat <<'EOF'
+Usage: bash fault-affinity-run [--version vX.Y.Z]
+
+Without --version, install the latest stable GitHub Release. The release is
+resolved once to an exact tag. This command only downloads, verifies, and
+extracts the kit; it never starts the live workload.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version)
+      [ "$#" -ge 2 ] || { echo "error: --version requires a tag" >&2; exit 2; }
+      requested_version=$2
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ "$(/usr/bin/id -u)" -eq 0 ]; then
+  echo "error: do not run this bootstrap as root or with sudo" >&2
+  exit 1
+fi
+
+[ "$(/usr/bin/uname -s)" = Linux ] || {
+  echo "error: this kit supports Linux only" >&2
+  exit 1
+}
+
+case "$(/usr/bin/uname -m)" in
+  x86_64|amd64) ;;
+  *)
+    echo "error: this release supports x86-64 only" >&2
+    exit 1
+    ;;
+esac
+
+[ -x /usr/bin/python3 ] || {
+  echo "error: python3 is required to verify and safely extract the kit" >&2
+  exit 1
+}
+
+/usr/bin/python3 -I - "$project_repository" "$asset_name" "$requested_version" "$(pwd -P)" <<'PY'
+import ctypes
+import gzip
+import hashlib
+import http.client
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shlex
+import shutil
+import signal
+import stat
+import sys
+import tarfile
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+
+REPOSITORY, ASSET_NAME, REQUESTED_TAG, DESTINATION_ROOT = sys.argv[1:]
+API_ROOT = f"https://api.github.com/repos/{REPOSITORY}"
+RELEASE_ROOT = f"https://github.com/{REPOSITORY}/releases/download"
+ALLOWED_REDIRECT_HOSTS = {
+    "github.com",
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com",
+}
+MAX_API_BYTES = 1024 * 1024
+MAX_CHECKSUM_BYTES = 4096
+MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
+MAX_MEMBERS = 4096
+MIN_FREE_MARGIN = 256 * 1024 * 1024
+TAG_PATTERN = re.compile(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SOURCE_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+TEST_FIXTURE_MODE = False
+
+
+def fail(message):
+    raise SystemExit(f"error: {message}")
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as input_file:
+        for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def stop_on_signal(signum, frame):
+    del frame
+    raise SystemExit(f"error: interrupted by signal {signum}")
+
+
+for handled_signal in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(handled_signal, stop_on_signal)
+
+
+def rename_without_replacing(source, destination):
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        fail("this Linux system does not provide renameat2 for safe final installation")
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    at_fdcwd = -100
+    rename_noreplace = 1
+    if renameat2(
+        at_fdcwd,
+        os.fsencode(source),
+        at_fdcwd,
+        os.fsencode(destination),
+        rename_noreplace,
+    ) != 0:
+        error_number = ctypes.get_errno()
+        fail(f"cannot finalize new destination {destination}: {os.strerror(error_number)}")
+
+
+class StrictRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, new_url):
+        parsed = urllib.parse.urlparse(new_url)
+        if parsed.scheme != "https" or parsed.hostname not in ALLOWED_REDIRECT_HOSTS:
+            fail(f"refusing download redirect to {new_url!r}")
+        return super().redirect_request(request, fp, code, msg, headers, new_url)
+
+
+opener = urllib.request.build_opener(StrictRedirects())
+
+
+def fetch(url, destination, limit):
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "fault-affinity-bootstrap/1"},
+    )
+    try:
+        with opener.open(request, timeout=30) as response:
+            final = urllib.parse.urlparse(response.geturl())
+            if final.scheme != "https" or final.hostname not in ALLOWED_REDIRECT_HOSTS | {"api.github.com"}:
+                fail(f"refusing response from {response.geturl()!r}")
+            length = response.headers.get("Content-Length")
+            if length is not None and int(length) > limit:
+                fail(f"download exceeds {limit} bytes: {url}")
+            written = 0
+            with open(destination, "xb") as output:
+                while chunk := response.read(1024 * 1024):
+                    written += len(chunk)
+                    if written > limit:
+                        fail(f"download exceeds {limit} bytes: {url}")
+                    output.write(chunk)
+    except (OSError, http.client.HTTPException, urllib.error.URLError, ValueError) as error:
+        fail(f"download failed for {url}: {error}")
+
+
+def copy_test_fixture(name, destination, limit):
+    source = Path(os.environ["FAULT_AFFINITY_TEST_RELEASE_DIR"]) / name
+    if not source.is_file() or source.is_symlink():
+        fail(f"test fixture is not a regular file: {source}")
+    if source.stat().st_size > limit:
+        fail(f"test fixture exceeds {limit} bytes: {source}")
+    with open(source, "rb") as input_file, open(destination, "xb") as output:
+        shutil.copyfileobj(input_file, output, 1024 * 1024)
+
+
+test_mode = TEST_FIXTURE_MODE
+if test_mode and not os.environ.get("FAULT_AFFINITY_TEST_RELEASE_DIR"):
+    fail("fixture mode requires a test release directory")
+
+with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary:
+    temporary_path = Path(temporary)
+    if REQUESTED_TAG:
+        tag = REQUESTED_TAG
+    elif test_mode:
+        tag = os.environ.get("FAULT_AFFINITY_TEST_TAG", "")
+    else:
+        latest_path = temporary_path / "latest.json"
+        fetch(f"{API_ROOT}/releases/latest", latest_path, MAX_API_BYTES)
+        try:
+            latest = json.loads(latest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            fail(f"invalid latest-release response: {error}")
+        if latest.get("draft") is not False or latest.get("prerelease") is not False:
+            fail("the latest release response is not a published stable release")
+        tag = latest.get("tag_name")
+
+    if not isinstance(tag, str) or not TAG_PATTERN.fullmatch(tag):
+        fail(f"invalid release tag: {tag!r}")
+
+    archive_path = temporary_path / ASSET_NAME
+    checksum_name = f"{ASSET_NAME}.sha256"
+    checksum_path = temporary_path / checksum_name
+    if test_mode:
+        copy_test_fixture(ASSET_NAME, archive_path, MAX_ARCHIVE_BYTES)
+        copy_test_fixture(checksum_name, checksum_path, MAX_CHECKSUM_BYTES)
+    else:
+        quoted_tag = urllib.parse.quote(tag, safe="")
+        exact_root = f"{RELEASE_ROOT}/{quoted_tag}"
+        fetch(f"{exact_root}/{ASSET_NAME}", archive_path, MAX_ARCHIVE_BYTES)
+        fetch(f"{exact_root}/{checksum_name}", checksum_path, MAX_CHECKSUM_BYTES)
+
+    try:
+        checksum_text = checksum_path.read_text(encoding="ascii")
+    except (OSError, UnicodeError) as error:
+        fail(f"invalid checksum file: {error}")
+    checksum_match = re.fullmatch(
+        rf"([0-9a-f]{{64}}) [ *]{re.escape(ASSET_NAME)}\n?", checksum_text
+    )
+    if not checksum_match:
+        fail("checksum file does not contain exactly one expected SHA-256 entry")
+    expected_checksum = checksum_match.group(1)
+    if not SHA256_PATTERN.fullmatch(expected_checksum) or sha256_file(archive_path) != expected_checksum:
+        fail("archive SHA-256 does not match the published checksum")
+
+    # Scan physical headers before tarfile normalizes GNU/PAX extension records.
+    # Only ustar/v7 regular files and directories are accepted.
+    expanded = 0
+    physical_headers = 0
+    try:
+        with gzip.open(archive_path, "rb") as stream:
+            zero_blocks = 0
+            while True:
+                header = stream.read(512)
+                expanded += len(header)
+                if expanded > MAX_EXPANDED_BYTES:
+                    fail("expanded archive exceeds the safety limit")
+                if not header:
+                    break
+                if len(header) != 512:
+                    fail("archive ends in a partial tar header")
+                if header == b"\0" * 512:
+                    zero_blocks += 1
+                    if zero_blocks >= 2:
+                        while trailer := stream.read(1024 * 1024):
+                            expanded += len(trailer)
+                            if expanded > MAX_EXPANDED_BYTES:
+                                fail("expanded archive exceeds the safety limit")
+                            if trailer.strip(b"\0"):
+                                fail("archive has non-zero data after its end marker")
+                        break
+                    continue
+                if zero_blocks:
+                    fail("archive has a member after a zero end marker")
+                physical_headers += 1
+                if physical_headers > MAX_MEMBERS:
+                    fail("archive has too many physical headers")
+                stored_checksum = header[148:156]
+                if stored_checksum[0] & 0x80:
+                    fail("archive uses an unsupported binary header checksum")
+                try:
+                    expected_header_checksum = int(stored_checksum.strip(b" \0") or b"0", 8)
+                except ValueError:
+                    fail("archive has an invalid header checksum field")
+                computed_header_checksum = sum(header[:148]) + (8 * 32) + sum(header[156:])
+                if expected_header_checksum != computed_header_checksum:
+                    fail("archive has an invalid physical header checksum")
+                type_flag = header[156:157]
+                if type_flag not in (b"\0", b"0", b"5"):
+                    fail(f"archive contains unsupported header type {type_flag!r}")
+                size_field = header[124:136]
+                if size_field[0] & 0x80:
+                    fail("archive uses an unsupported binary size field")
+                try:
+                    size = int(size_field.strip(b" \0") or b"0", 8)
+                except ValueError:
+                    fail("archive has an invalid member size")
+                if type_flag == b"5" and size != 0:
+                    fail("archive directory has an unexpected payload")
+                padded_size = ((size + 511) // 512) * 512
+                expanded += padded_size
+                if expanded > MAX_EXPANDED_BYTES:
+                    fail("expanded archive exceeds the safety limit")
+                remaining = padded_size
+                while remaining:
+                    chunk = stream.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        fail("archive is truncated inside a member")
+                    remaining -= len(chunk)
+            if zero_blocks < 2:
+                fail("archive is missing its complete end marker")
+    except (OSError, EOFError) as error:
+        fail(f"cannot decompress archive: {error}")
+
+    destination_root = Path(DESTINATION_ROOT)
+    destination = destination_root / f"fault-affinity-{tag}"
+    staging = destination_root / f".fault-affinity-{tag}.partial-{os.getpid()}"
+    if destination.exists() or destination.is_symlink():
+        fail(f"destination already exists: {destination}")
+    if staging.exists() or staging.is_symlink():
+        fail(f"temporary destination already exists: {staging}")
+    if shutil.disk_usage(destination_root).free < expanded + archive_path.stat().st_size + MIN_FREE_MARGIN:
+        fail("not enough free space to extract the verified archive safely")
+
+    members = []
+    canonical_names = set()
+    total_size = 0
+    required = {
+        "fault-affinity/MODE-MANIFEST.json",
+        "fault-affinity/RELEASE.json",
+        "fault-affinity/README.txt",
+        "fault-affinity/app/child.mjs",
+        "fault-affinity/app/src/reference-kit/controller.mjs",
+        "fault-affinity/bin/run-reference",
+        "fault-affinity/share/prepare-results",
+    }
+    allowed_roots = {
+        "MODE-MANIFEST.json", "RELEASE.json", "README.txt", "LICENSES",
+        "bin", "runtime", "app", "share",
+    }
+    try:
+        with tarfile.open(archive_path, mode="r:gz", errorlevel=2) as archive:
+            if archive.pax_headers:
+                fail("archive contains unsupported global extended headers")
+            for member in archive:
+                if len(members) >= MAX_MEMBERS:
+                    fail("archive has too many members")
+                if member.pax_headers:
+                    fail(f"archive member uses unsupported extended headers: {member.name!r}")
+                if not (member.isfile() or member.isdir()):
+                    fail(f"archive contains a link or special file: {member.name!r}")
+                raw_name = member.name.rstrip("/")
+                path = PurePosixPath(raw_name)
+                if (
+                    not raw_name
+                    or raw_name.startswith("/")
+                    or "\\" in raw_name
+                    or any(part in ("", ".", "..") for part in path.parts)
+                    or any(ord(character) < 32 or ord(character) == 127 for character in raw_name)
+                ):
+                    fail(f"archive contains an unsafe path: {member.name!r}")
+                canonical = "/".join(path.parts)
+                if canonical in canonical_names:
+                    fail(f"archive contains a duplicate path: {canonical!r}")
+                canonical_names.add(canonical)
+                if path.parts[0] != "fault-affinity":
+                    fail(f"archive has an unexpected top-level layout: {member.name!r}")
+                if len(path.parts) == 1 and not member.isdir():
+                    fail("archive top-level entry is not a directory")
+                if len(path.parts) > 1 and path.parts[1] not in allowed_roots:
+                    fail(f"archive has an unexpected top-level entry: {member.name!r}")
+                permissions = stat.S_IMODE(member.mode)
+                if member.isdir():
+                    if permissions not in (0o755, 0o700):
+                        fail(f"archive directory has unexpected mode {permissions:o}: {member.name!r}")
+                elif permissions not in (0o644, 0o755):
+                    fail(f"archive file has unexpected mode {permissions:o}: {member.name!r}")
+                total_size += member.size
+                if total_size > MAX_EXPANDED_BYTES:
+                    fail("archive member sizes exceed the safety limit")
+                members.append((member, path.parts[1:]))
+
+            missing = required - canonical_names
+            if missing:
+                fail(f"archive is missing required entries: {', '.join(sorted(missing))}")
+
+            staging.mkdir(mode=0o700)
+            try:
+                extracted_directories = []
+                for member, relative_parts in members:
+                    target = staging.joinpath(*relative_parts)
+                    if member.isdir():
+                        target.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        extracted_directories.append((target, stat.S_IMODE(member.mode)))
+                        continue
+                    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    extracted = archive.extractfile(member)
+                    if extracted is None:
+                        fail(f"cannot read archive member: {member.name!r}")
+                    descriptor = os.open(
+                        target,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                        0o600,
+                    )
+                    with extracted, os.fdopen(descriptor, "wb") as output:
+                        copied = 0
+                        while chunk := extracted.read(1024 * 1024):
+                            copied += len(chunk)
+                            if copied > member.size:
+                                fail(f"member expands beyond its declared size: {member.name!r}")
+                            output.write(chunk)
+                        if copied != member.size:
+                            fail(f"member ended before its declared size: {member.name!r}")
+                    os.chmod(target, stat.S_IMODE(member.mode), follow_symlinks=False)
+
+                for target, permissions in reversed(extracted_directories):
+                    os.chmod(target, permissions, follow_symlinks=False)
+
+                release_path = staging / "RELEASE.json"
+                if release_path.stat().st_size > 128 * 1024:
+                    fail("RELEASE.json exceeds its safety limit")
+                release = json.loads(release_path.read_text(encoding="utf-8"))
+                release_info = release.get("release") if isinstance(release, dict) else None
+                runtimes = release.get("runtimes") if isinstance(release, dict) else None
+                if (
+                    not isinstance(release, dict)
+                    or release.get("schemaVersion") != 1
+                    or not isinstance(release_info, dict)
+                    or not isinstance(runtimes, dict)
+                ):
+                    fail("RELEASE.json has an unsupported schema")
+                if release_info.get("tag") != tag:
+                    fail("RELEASE.json tag does not match the resolved release")
+                version = release_info.get("version")
+                if not isinstance(version, str) or f"v{version}" != tag:
+                    fail("RELEASE.json version does not match its tag")
+                source_commit = release_info.get("sourceCommit")
+                if not isinstance(source_commit, str) or not SOURCE_COMMIT_PATTERN.fullmatch(source_commit):
+                    fail("RELEASE.json source commit is invalid")
+                runtime_lines = []
+                for role in ("controller", "reference"):
+                    identity = runtimes.get(role)
+                    if not isinstance(identity, dict):
+                        fail(f"RELEASE.json is missing the {role} runtime identity")
+                    runtime_version = identity.get("version")
+                    runtime_hash = identity.get("sha256")
+                    if not isinstance(runtime_version, str) or not runtime_version:
+                        fail(f"RELEASE.json has an invalid {role} runtime version")
+                    if not isinstance(runtime_hash, str) or not SHA256_PATTERN.fullmatch(runtime_hash):
+                        fail(f"RELEASE.json has an invalid {role} runtime SHA-256")
+                    runtime_path = staging / "runtime" / role / "bin" / "node"
+                    if not runtime_path.is_file() or runtime_path.is_symlink():
+                        fail(f"archive is missing the {role} runtime executable")
+                    observed_hash = sha256_file(runtime_path)
+                    if observed_hash != runtime_hash:
+                        fail(f"{role} runtime does not match its RELEASE.json SHA-256")
+                    runtime_lines.append((role, runtime_version, runtime_hash))
+
+                manifest_path = staging / "MODE-MANIFEST.json"
+                if manifest_path.stat().st_size > 1024 * 1024:
+                    fail("MODE-MANIFEST.json exceeds its safety limit")
+                mode_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if (
+                    not isinstance(mode_manifest, dict)
+                    or set(mode_manifest) != {"schemaVersion", "files"}
+                    or mode_manifest.get("schemaVersion") != 1
+                    or not isinstance(mode_manifest.get("files"), list)
+                ):
+                    fail("MODE-MANIFEST.json has an unsupported schema")
+                declared_modes = {}
+                for item in mode_manifest["files"]:
+                    if (
+                        not isinstance(item, dict)
+                        or set(item) != {"path", "mode"}
+                        or not isinstance(item.get("path"), str)
+                        or not re.fullmatch(r"0(?:644|755)", item.get("mode", ""))
+                        or item["path"] in declared_modes
+                    ):
+                        fail("MODE-MANIFEST.json contains an invalid or duplicate entry")
+                    declared_modes[item["path"]] = item["mode"]
+                observed_modes = {
+                    "/".join(relative_parts): f"{stat.S_IMODE(member.mode):04o}"
+                    for member, relative_parts in members
+                    if member.isfile() and "/".join(relative_parts) != "MODE-MANIFEST.json"
+                }
+                if declared_modes != observed_modes:
+                    fail("MODE-MANIFEST.json does not match the archive file names and modes")
+
+                rename_without_replacing(staging, destination)
+            except BaseException:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+    except (tarfile.TarError, OSError, UnicodeError, json.JSONDecodeError) as error:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        fail(f"archive validation or extraction failed: {error}")
+
+print()
+print(f"Verified and extracted fault-affinity {tag}")
+print(f"  source commit: {source_commit}")
+print(f"  archive SHA-256: {expected_checksum}")
+for role, runtime_version, runtime_hash in runtime_lines:
+    print(f"  {role} runtime: {runtime_version} ({runtime_hash})")
+print(f"  directory: {destination}")
+print()
+preview = shlex.quote(str(destination / "bin" / "run-reference"))
+print("No workload was started. For a safe preview using temporary live-session storage:")
+print(f'  {preview} --results-root "$HOME"')
+print("Do not add --yes yet. Read README.txt and choose persistent Unix storage first.")
+PY

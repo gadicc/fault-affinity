@@ -1,0 +1,95 @@
+name: Reference kit result
+description: Share a privacy-reviewed result or a restricted view-only link from the pinned reference kit.
+title: "reference result: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping compare the reference workload. A result is an observation, not an automatic hardware diagnosis.
+
+        GitHub issues are normally public. Do not paste credentials, serial numbers, private account names, or unreviewed logs. Prefer a restricted, view-only archive link and retain your original copy. The harness never uploads results automatically.
+
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Safety and privacy checks
+      options:
+        - label: I ran the workload deliberately with `--yes`; a download, extraction, or dry run did not start it.
+          required: true
+        - label: I waited for the controller to end and confirmed that induced-load workers stopped before preparing or uploading files.
+          required: true
+        - label: I reviewed the prepared archive inventory and removed no files from the integrity-bound original evidence.
+          required: true
+        - label: I understand that this issue is public and have not included secrets, credentials, serial numbers, or unrelated files.
+          required: true
+
+  - type: input
+    id: release
+    attributes:
+      label: Kit release tag
+      description: Copy the exact tag printed by the bootstrap and recorded in RELEASE.json.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: source_commit
+    attributes:
+      label: Source commit
+      description: Copy the full source commit from RELEASE.json.
+      placeholder: 40-character commit ID
+    validations:
+      required: true
+
+  - type: input
+    id: result_sha256
+    attributes:
+      label: Prepared archive SHA-256
+      description: Paste only the 64-character digest from the verified .sha256 file.
+      placeholder: 0123456789abcdef…
+    validations:
+      required: true
+
+  - type: textarea
+    id: result_link
+    attributes:
+      label: Result archive or link
+      description: Attach a small privacy-reviewed archive, or provide a restricted view-only Google Drive, Dropbox, or equivalent link. Ensure maintainers can open it.
+      placeholder: Drag a small archive here, or paste https://…
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Official Ubuntu Desktop 26.04 LTS live session, x86-64
+        - Official Ubuntu Desktop 24.04 LTS live session, x86-64
+        - Another environment (explain below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: High-level outcome
+      description: Summarize completed attempts, observed target exits, timeouts, interruptions, and cleanup status without diagnosing the cause.
+      placeholder: "A1: …; B: …; A2: …; cleanup: …"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Non-sensitive context
+      description: Note relevant firmware settings, general hardware model, deviations from defaults, interruptions, or upload problems. Omit serial numbers and account details.
+
+  - type: checkboxes
+    id: integrity
+    attributes:
+      label: Integrity check
+      options:
+        - label: I verified the prepared archive against the submitted SHA-256 on a stable machine after copying or downloading it.
+          required: true
