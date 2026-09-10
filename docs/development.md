@@ -2,6 +2,29 @@
 
 This guide describes the current offline test suite and safety boundary. The automated tests do not run the crash workload or change system settings.
 
+Repository automation and the packaged controller use Node 24.21.0. If `nvm`
+is installed, `nvm use` reads that exact version from `.nvmrc`; otherwise use
+an equivalent version manager or install the version explicitly. The separate
+Node 25.2.1 reference runtime is bundled only as the frozen PGlite target and
+must not be substituted with the host runtime when collecting reference data.
+
+## Use the integration and release branches
+
+`dev` is the integration branch. Feature pull requests target `dev`; safe CI
+must pass there before promotion. `main` remains the stable/default branch and
+accepts either an in-repository `dev` promotion or an explicitly named
+`hotfix/*` pull request.
+
+Merge `dev` into `main` with a merge commit. Do not squash a promotion: the
+release analyzer needs the individual Conventional Commits that entered
+`dev`. Merge a released hotfix back into `dev` immediately.
+
+The private package version stays at `0.0.0-development`. Protected `vX.Y.Z`
+tags and immutable GitHub releases are the public version authority. The reviewed
+`v0.0.0` tag is the history baseline for the first semantic-release run; it is
+not a downloadable user release. Release automation runs only from `main`, and
+no CI workflow is permitted to execute a live fault workload.
+
 ## Run the offline suite
 
 Install dependencies, then run:

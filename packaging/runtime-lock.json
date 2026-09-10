@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "name": "Node.js official distribution archive",
+    "checksums": "https://nodejs.org/dist/{version}/SHASUMS256.txt"
+  },
+  "platforms": {
+    "linux-x64": {
+      "controller": {
+        "version": "v24.21.0",
+        "archive": "node-v24.21.0-linux-x64.tar.xz",
+        "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.xz",
+        "bytes": 31890184,
+        "sha256": "fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6",
+        "archiveRoot": "node-v24.21.0-linux-x64"
+      },
+      "reference": {
+        "version": "v25.2.1",
+        "archive": "node-v25.2.1-linux-x64.tar.xz",
+        "url": "https://nodejs.org/dist/v25.2.1/node-v25.2.1-linux-x64.tar.xz",
+        "bytes": 28628292,
+        "sha256": "b9f6a97e81c89a9df45526b4f86dafdccaf12b82295f7bf35bdb2b0f5e68744f",
+        "archiveRoot": "node-v25.2.1-linux-x64"
+      }
+    },
+    "windows-x64": {
+      "controller": {
+        "version": "v24.21.0",
+        "archive": "node-v24.21.0-win-x64.zip",
+        "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-x64.zip",
+        "bytes": 37618919,
+        "sha256": "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
+        "archiveRoot": "node-v24.21.0-win-x64"
+      },
+      "reference": {
+        "version": "v25.2.1",
+        "archive": "node-v25.2.1-win-x64.zip",
+        "url": "https://nodejs.org/dist/v25.2.1/node-v25.2.1-win-x64.zip",
+        "bytes": 36700021,
+        "sha256": "f97ba75ead7720652f3925d9cf8661e083a28c6b98ea77acc83903d77a9dd688",
+        "archiveRoot": "node-v25.2.1-win-x64"
+      }
+    }
+  }
+}

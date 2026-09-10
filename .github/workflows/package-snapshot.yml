@@ -1,0 +1,68 @@
+name: Package snapshot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - "src/reference-kit/**"
+      - "diagnose-lib/**"
+      - "packaging/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/package-snapshot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x64:
+    name: Stage Linux x64 kit (no live workload)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up pinned controller Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+          cache: npm
+
+      - name: Install locked development dependencies
+        run: npm ci
+
+      - name: Run hermetic packaging tests
+        run: npm run test:distribution
+
+      - name: Check shell syntax
+        run: |
+          bash -n src/reference-kit/run-reference
+          bash -n packaging/templates/prepare-results
+
+      - name: Build version-neutral stage
+        run: >-
+          node packaging/stage-linux.mjs
+          --output-directory "$RUNNER_TEMP/linux-stage"
+          --runtime-cache "$RUNNER_TEMP/runtime-cache"
+
+      - name: Inspect only harmless runtime and launcher output
+        run: |
+          mkdir "$RUNNER_TEMP/stage-smoke"
+          tar -xzf "$RUNNER_TEMP/linux-stage/fault-affinity-live-linux-x64.stage.tar.gz" \
+            -C "$RUNNER_TEMP/stage-smoke"
+          "$RUNNER_TEMP/stage-smoke/fault-affinity/runtime/controller/bin/node" --version
+          "$RUNNER_TEMP/stage-smoke/fault-affinity/runtime/reference/bin/node" --version
+          "$RUNNER_TEMP/stage-smoke/fault-affinity/bin/run-reference" --help
+          "$RUNNER_TEMP/stage-smoke/fault-affinity/share/prepare-results" --help
+
+      - name: Upload packed version-neutral stage
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-x64-stage-${{ github.sha }}
+          path: ${{ runner.temp }}/linux-stage/fault-affinity-live-linux-x64.stage.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

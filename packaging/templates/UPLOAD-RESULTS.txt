@@ -1,0 +1,37 @@
+PRESERVE AND SHARE RESULTS
+==========================
+
+The result-preparation command prints the exact archive inventory and SHA-256
+checksum. Review both before sharing. Raw arguments, paths, process output, and
+error text can contain identifying information. The tool inventories files; it
+does not promise that arbitrary captured content is private.
+
+Preferred route
+---------------
+
+1. Copy the .tar.gz archive and its .sha256 file to another USB drive or a
+   mounted persistent data volume.
+2. Reread and verify the checksum on a stable machine.
+3. Upload from that stable machine and share a view-only link.
+
+Browser fallback
+----------------
+
+Only after every induced-load worker has stopped, you may use Firefox included
+with the Ubuntu live image to upload the archive to Google Drive, Dropbox, or
+another provider. A small archive can instead be attached in Gmail or another
+mail provider. Prefer storage plus a view-only link for a larger archive.
+
+Close Firefox during the measured run. Avoid signing into an important account
+on a machine you consider unstable when removable media is available. Log out
+when finished, then shut down the live session. Browser data and credentials
+are not part of the evidence bundle and must never be collected by this kit.
+
+Nothing in this kit uploads automatically or asks for cloud credentials.
+
+Storage note
+------------
+
+The prepared archive publisher supports ordinary FAT/exFAT removable media.
+The active raw result directory has stricter Unix permission and locking
+requirements; see README.txt and the public live-kit guide.
