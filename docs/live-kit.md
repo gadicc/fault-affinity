@@ -5,18 +5,6 @@ experiment without installing Git, Node, npm, or a compiler. It records
 observations under controlled CPU affinity; it does not, by itself, diagnose a
 processor, motherboard, or operating system fault.
 
-This first kit records bounded, non-serial machine, BIOS, microcode, kernel,
-runtime, and CPU-topology identity. It does not yet collect continuous
-frequency or temperature telemetry. That is an acceptance-gated follow-up, so
-the kit is not a byte-for-byte replacement for the telemetry-rich legacy
-diagnostic suite.
-
-It is also a fixed, known-target reference profile. CPU 19 is preserved for
-the motivating case study; it is not a general guess for another computer.
-Until the separately versioned discovery flow is released, use this kit only
-when you have a reviewed target/load override or deliberately want the exact
-case-study comparison.
-
 The first validation target is an official Ubuntu Desktop 26.04 LTS live
 session on an x86-64 computer. Public release remains disabled until that
 manual acceptance run passes. Ubuntu Desktop 24.04 LTS is a later compatibility
@@ -44,6 +32,20 @@ create a result bundle.
 
 When the plan appears, the safe preview is complete. Continue below to choose
 persistent storage and understand the deliberate live-run step.
+
+## What this first kit covers
+
+This first kit records bounded, non-serial machine, BIOS, microcode, kernel,
+runtime, and CPU-topology identity. It does not yet collect continuous
+frequency or temperature telemetry. That is an acceptance-gated follow-up, so
+the kit is not a byte-for-byte replacement for the telemetry-rich legacy
+diagnostic suite.
+
+It is also a fixed, known-target reference profile. CPU 19 is preserved for
+the motivating case study; it is not a general guess for another computer.
+Until the separately versioned discovery flow is released, use this kit only
+when you have a reviewed target/load override or deliberately want the exact
+case-study comparison.
 
 ## Before booting
 

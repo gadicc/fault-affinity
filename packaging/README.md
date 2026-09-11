@@ -51,9 +51,27 @@ commit-bound `0.1.0-dev.<short-commit>` acceptance candidate. It verifies the
 final checksums, safely extracts the archive, checks both bundled runtime
 versions, and invokes only launcher help before uploading
 `linux-x64-acceptance-<commit>`. The artifact is installable test input, not a
-Git tag or GitHub Release, and it expires after seven days. Download its ZIP,
-extract the contained release files, verify `SHA256SUMS`, then use the Linux
-archive for installed-system or offline live-session acceptance.
+Git tag or GitHub Release, and it expires after seven days.
+
+From the successful **Package snapshot** run, download
+`linux-x64-acceptance-<commit>.zip`. At the repository root, replace only the
+first path below with the downloaded ZIP:
+
+```sh
+acceptance_zip=/path/to/linux-x64-acceptance-<commit>.zip
+acceptance_files=$(mktemp -d)
+acceptance_kit=$(mktemp -d)
+unzip "$acceptance_zip" -d "$acceptance_files"
+(cd "$acceptance_files" && sha256sum --check SHA256SUMS)
+python3 packaging/safe-extract.py \
+  "$acceptance_files/fault-affinity-live-linux-x64.tar.gz" \
+  "$acceptance_kit"
+"$acceptance_kit/fault-affinity/bin/run-reference" --results-root "$HOME"
+```
+
+The last command is a dry run. It validates the candidate and prints a plan;
+it does not start the workload. `mktemp` creates new, empty directories each
+time, so an earlier check cannot contaminate a later one.
 
 Repository settings still required outside the tree:
 
