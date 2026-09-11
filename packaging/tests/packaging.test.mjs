@@ -220,7 +220,7 @@ function recoveryProvenanceFixture() {
   const run = {
     id: 12345,
     workflow_id: 777,
-    path: ".github/workflows/release.yml@main",
+    path: ".github/workflows/release.yml",
     head_branch: "main",
     head_sha: commit,
     status: "completed",
@@ -276,6 +276,7 @@ test("recovery binds one artifact to the trusted completed main release run", ()
 test("recovery rejects user-selected artifacts without exact server provenance", () => {
   for (const mutate of [
     (value) => { value.run.path = ".github/workflows/package-snapshot.yml"; },
+    (value) => { value.run.path = ".github/workflows/release.yml@main"; },
     (value) => { value.run.head_branch = "dev"; },
     (value) => { value.run.repository.full_name = "attacker/fault-affinity"; },
     (value) => { value.run.conclusion = "cancelled"; },
@@ -310,6 +311,18 @@ test("dev snapshots upload a finalized non-publishing acceptance candidate", () 
   assert.match(workflow, /name: linux-x64-acceptance-\$\{\{ github\.sha \}\}/);
   assert.doesNotMatch(workflow, /contents:\s*write/);
   assert.doesNotMatch(workflow, /gh release|semantic-release|publish-release/);
+
+  const pathsBlock = workflow.match(/^    paths:\n((?:      - [^\n]+\n)+)/m);
+  assert.ok(pathsBlock, "snapshot workflow must declare push path filters");
+  const triggerPaths = pathsBlock[1].trim().split("\n").map((line) =>
+    JSON.parse(line.replace(/^\s*-\s*/, "")));
+  const packagedSources = JSON.parse(readFileSync(path.join(repositoryRoot,
+    "packaging/linux-files.json"), "utf8")).regularFiles.map((entry) => entry.source);
+  for (const source of packagedSources) {
+    assert.ok(triggerPaths.some((trigger) => trigger === source ||
+      (trigger.endsWith("/**") && source.startsWith(trigger.slice(0, -2)))),
+    `snapshot workflow does not cover packaged source ${source}`);
+  }
 });
 
 test("semantic-release guard enforces planned version and commit before publish", async () => {

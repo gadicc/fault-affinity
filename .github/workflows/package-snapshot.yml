@@ -5,6 +5,8 @@ on:
   push:
     branches: [dev]
     paths:
+      - "LICENSE.TXT"
+      - "child.mjs"
       - "src/reference-kit/**"
       - "diagnose-lib/**"
       - "packaging/**"

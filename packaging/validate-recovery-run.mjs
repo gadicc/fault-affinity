@@ -36,13 +36,9 @@ export function validateRecoveryRunProvenance({
     run.head_repository?.id === run.repository.id,
   "workflow run does not belong to the expected repository",
   "RECOVERY_RUN_REPOSITORY_MISMATCH");
-  const allowedRunPaths = new Set([
-    `${TRUSTED_WORKFLOW_PATH}@main`,
-    `${TRUSTED_WORKFLOW_PATH}@refs/heads/main`,
-  ]);
   requireCondition(run.workflow_id === workflow?.id && Number.isSafeInteger(workflow?.id) &&
     workflow.id > 0 && workflow.path === TRUSTED_WORKFLOW_PATH && workflow.state === "active" &&
-    allowedRunPaths.has(run.path),
+    run.path === TRUSTED_WORKFLOW_PATH,
   "workflow run does not belong to the trusted stable release workflow",
   "RECOVERY_RUN_WORKFLOW_MISMATCH");
   requireCondition(run.head_branch === "main" && run.head_sha === expectedCommit,
