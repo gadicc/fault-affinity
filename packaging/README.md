@@ -58,20 +58,24 @@ From the successful **Package snapshot** run, download
 first path below with the downloaded ZIP:
 
 ```sh
-acceptance_zip=/path/to/linux-x64-acceptance-<commit>.zip
-acceptance_files=$(mktemp -d)
-acceptance_kit=$(mktemp -d)
-unzip "$acceptance_zip" -d "$acceptance_files"
-(cd "$acceptance_files" && sha256sum --check SHA256SUMS)
-python3 packaging/safe-extract.py \
-  "$acceptance_files/fault-affinity-live-linux-x64.tar.gz" \
-  "$acceptance_kit"
-"$acceptance_kit/fault-affinity/bin/run-reference" --results-root "$HOME"
+(
+  set -eu
+  acceptance_zip="/path/to/linux-x64-acceptance-<commit>.zip"
+  acceptance_files=$(mktemp -d)
+  acceptance_kit=$(mktemp -d)
+  unzip "$acceptance_zip" -d "$acceptance_files"
+  (cd "$acceptance_files" && sha256sum --check SHA256SUMS)
+  python3 packaging/safe-extract.py \
+    "$acceptance_files/fault-affinity-live-linux-x64.tar.gz" \
+    "$acceptance_kit"
+  "$acceptance_kit/fault-affinity/bin/run-reference" --results-root "$HOME"
+)
 ```
 
-The last command is a dry run. It validates the candidate and prints a plan;
-it does not start the workload. `mktemp` creates new, empty directories each
-time, so an earlier check cannot contaminate a later one.
+The block stops at the first failed command. Its last command is a dry run: it
+validates the candidate and prints a plan without starting the workload.
+`mktemp` creates new, empty directories each time, so an earlier check cannot
+contaminate a later one.
 
 Repository settings still required outside the tree:
 
