@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   linux-x64:
-    name: Stage Linux x64 kit (no live workload)
+    name: Build Linux x64 acceptance candidate (no live workload)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -48,21 +48,38 @@ jobs:
           --output-directory "$RUNNER_TEMP/linux-stage"
           --runtime-cache "$RUNNER_TEMP/runtime-cache"
 
-      - name: Inspect only harmless runtime and launcher output
+      - name: Finalize commit-bound acceptance candidate
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
         run: |
-          mkdir "$RUNNER_TEMP/stage-smoke"
-          tar -xzf "$RUNNER_TEMP/linux-stage/fault-affinity-live-linux-x64.stage.tar.gz" \
-            -C "$RUNNER_TEMP/stage-smoke"
-          "$RUNNER_TEMP/stage-smoke/fault-affinity/runtime/controller/bin/node" --version
-          "$RUNNER_TEMP/stage-smoke/fault-affinity/runtime/reference/bin/node" --version
-          "$RUNNER_TEMP/stage-smoke/fault-affinity/bin/run-reference" --help
-          "$RUNNER_TEMP/stage-smoke/fault-affinity/share/prepare-results" --help
+          source_date_epoch=$(git show -s --format=%ct "$SOURCE_COMMIT")
+          candidate_version="0.1.0-dev.${SOURCE_COMMIT:0:12}"
+          node packaging/finalize-release.mjs \
+            --stage "$RUNNER_TEMP/linux-stage/fault-affinity-live-linux-x64.stage.tar.gz" \
+            --output-directory "$RUNNER_TEMP/acceptance" \
+            --version "$candidate_version" \
+            --commit "$SOURCE_COMMIT" \
+            --source-date-epoch "$source_date_epoch"
+          printf 'Acceptance candidate `%s` for commit `%s`\n' \
+            "$candidate_version" "$SOURCE_COMMIT" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload packed version-neutral stage
+      - name: Verify candidate bytes and harmless launcher output
+        run: |
+          (cd "$RUNNER_TEMP/acceptance" && sha256sum --check SHA256SUMS)
+          mkdir "$RUNNER_TEMP/candidate-smoke"
+          python3 packaging/safe-extract.py \
+            "$RUNNER_TEMP/acceptance/fault-affinity-live-linux-x64.tar.gz" \
+            "$RUNNER_TEMP/candidate-smoke"
+          "$RUNNER_TEMP/candidate-smoke/fault-affinity/runtime/controller/bin/node" --version
+          "$RUNNER_TEMP/candidate-smoke/fault-affinity/runtime/reference/bin/node" --version
+          "$RUNNER_TEMP/candidate-smoke/fault-affinity/bin/run-reference" --help
+          "$RUNNER_TEMP/candidate-smoke/fault-affinity/share/prepare-results" --help
+
+      - name: Upload installable acceptance candidate
         uses: actions/upload-artifact@v6
         with:
-          name: linux-x64-stage-${{ github.sha }}
-          path: ${{ runner.temp }}/linux-stage/fault-affinity-live-linux-x64.stage.tar.gz
+          name: linux-x64-acceptance-${{ github.sha }}
+          path: ${{ runner.temp }}/acceptance/
           if-no-files-found: error
           retention-days: 7
           compression-level: 0

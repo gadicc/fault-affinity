@@ -46,6 +46,15 @@ tag, environment, and immutable-release protections. Snapshot builds, archive
 validation, and dry-run/help smoke checks remain available while publication
 is disabled.
 
+On `dev`, `package-snapshot.yml` turns the version-neutral stage into a
+commit-bound `0.1.0-dev.<short-commit>` acceptance candidate. It verifies the
+final checksums, safely extracts the archive, checks both bundled runtime
+versions, and invokes only launcher help before uploading
+`linux-x64-acceptance-<commit>`. The artifact is installable test input, not a
+Git tag or GitHub Release, and it expires after seven days. Download its ZIP,
+extract the contained release files, verify `SHA256SUMS`, then use the Linux
+archive for installed-system or offline live-session acceptance.
+
 Repository settings still required outside the tree:
 
 - keep `main` as the default branch and protect `main` and `dev`;

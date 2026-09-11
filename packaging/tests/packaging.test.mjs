@@ -300,6 +300,18 @@ test("release workflow passes expression values through env instead of shell int
   }
 });
 
+test("dev snapshots upload a finalized non-publishing acceptance candidate", () => {
+  const workflow = readFileSync(path.join(repositoryRoot,
+    ".github/workflows/package-snapshot.yml"), "utf8");
+  assert.match(workflow, /node packaging\/finalize-release\.mjs/);
+  assert.match(workflow, /candidate_version="0\.1\.0-dev\.\$\{SOURCE_COMMIT:0:12\}"/);
+  assert.match(workflow, /sha256sum --check SHA256SUMS/);
+  assert.match(workflow, /python3 packaging\/safe-extract\.py/);
+  assert.match(workflow, /name: linux-x64-acceptance-\$\{\{ github\.sha \}\}/);
+  assert.doesNotMatch(workflow, /contents:\s*write/);
+  assert.doesNotMatch(workflow, /gh release|semantic-release|publish-release/);
+});
+
 test("semantic-release guard enforces planned version and commit before publish", async () => {
   const saved = { version: process.env.EXPECTED_RELEASE_VERSION,
     commit: process.env.EXPECTED_RELEASE_COMMIT, sha: process.env.GITHUB_SHA };
