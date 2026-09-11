@@ -540,19 +540,42 @@ function normalizedErrorCode(error, fallback) {
   return ERROR_CODE_RE.test(candidate) ? candidate : fallback;
 }
 
-function waitForInterval(milliseconds, signal) {
+export function waitForMonotonicInterval(milliseconds, signal, dependencies = {}) {
   if (signal?.aborted || milliseconds === 0) return Promise.resolve(!signal?.aborted);
+  const nowNs = dependencies.nowNs ?? process.hrtime.bigint.bind(process.hrtime);
+  const setTimer = dependencies.setTimer ?? setTimeout;
+  const clearTimer = dependencies.clearTimer ?? clearTimeout;
+  const deadlineNs = nowNs() + BigInt(milliseconds) * 1_000_000n;
   return new Promise((resolve) => {
-    let timer;
+    let timer = null;
+    let settled = false;
     const finish = (completed) => {
-      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimer(timer);
       signal?.removeEventListener("abort", onAbort);
       resolve(completed);
     };
     const onAbort = () => finish(false);
-    timer = setTimeout(() => finish(true), milliseconds);
+    const waitForRemainder = () => {
+      if (signal?.aborted) {
+        finish(false);
+        return;
+      }
+      const remainingNs = deadlineNs - nowNs();
+      if (remainingNs <= 0n) {
+        finish(true);
+        return;
+      }
+      const remainingMs = Number((remainingNs + 999_999n) / 1_000_000n);
+      timer = setTimer(waitForRemainder, Math.max(1, remainingMs));
+    };
     signal?.addEventListener("abort", onAbort, { once: true });
-    if (signal?.aborted) onAbort();
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    timer = setTimer(waitForRemainder, milliseconds);
   });
 }
 
@@ -586,7 +609,7 @@ export async function runControlledLoadSession(rawOptions) {
   const attemptOptions = validateAttemptOptions(options.attemptOptions);
   const runAttempt = options.runAttempt ?? runWorkloadAttempt;
   const startWorkerSet = options.startWorkerSet ?? startControlledLoadWorkerSet;
-  const waitInterval = options.waitInterval ?? waitForInterval;
+  const waitInterval = options.waitInterval ?? waitForMonotonicInterval;
   requireCondition(typeof runAttempt === "function" && typeof startWorkerSet === "function" &&
     typeof waitInterval === "function",
   "controlled-load session dependencies must be functions");

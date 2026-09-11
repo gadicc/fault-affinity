@@ -16,6 +16,7 @@ import {
   parseControlledLoadSessionEnvelope,
   parseControlledLoadSessionManifest,
   runControlledLoadSession,
+  waitForMonotonicInterval,
 } from "../controlled-load-session.mjs";
 import {
   canonicalControlledLoadWorkerSetBoundaryLine,
@@ -227,6 +228,26 @@ test("the production adapter publishes one fully bracketed harmless A1/B/A2 sess
     phase,
     affinityDrift,
   ), /does not match the target singleton CPU/);
+});
+
+test("the production interval waiter retries an early timer wakeup", async () => {
+  let monotonicNs = 1_000_000_000n;
+  const requestedDelays = [];
+  const timerAdvances = [9_500_000n, 500_000n];
+  const completed = await waitForMonotonicInterval(10, null, {
+    nowNs: () => monotonicNs,
+    setTimer(callback, milliseconds) {
+      requestedDelays.push(milliseconds);
+      monotonicNs += timerAdvances.shift() ?? BigInt(milliseconds) * 1_000_000n;
+      queueMicrotask(callback);
+      return requestedDelays.length;
+    },
+    clearTimer() {},
+  });
+
+  assert.equal(completed, true);
+  assert.deepEqual(requestedDelays, [10, 1]);
+  assert.equal(monotonicNs, 1_010_000_000n);
 });
 
 test("an invalid A1 attempt prevents the condition workers from starting", async () => {
