@@ -59,7 +59,9 @@ import { readControlledLoadPlanFile } from "./controlled-load-plan.mjs";
 import { readCampaignPlanFile } from "./campaign-plan.mjs";
 import {
   buildCampaignReport,
+  renderCampaignCandidateSummary,
   renderCampaignReportMarkdown,
+  selectStrongestCampaignCandidate,
 } from "./campaign-report.mjs";
 import {
   publishCampaignReport,
@@ -84,6 +86,19 @@ import {
 import { readGroupPlanFile } from "./group-plan.mjs";
 import { readPinnedPlanFile } from "./pinned-plan.mjs";
 import { runPinnedWaveProcess } from "./pinned-wave-client.mjs";
+import {
+  buildLoadedDiscoveryPlanFromTopology,
+  buildLoadedDiscoveryReport,
+  LOADED_DISCOVERY_RECIPE,
+  renderLoadedDiscoveryConsoleSummary,
+} from "./loaded-discovery.mjs";
+import { runLoadedDiscoverySessionProcess } from "./loaded-discovery-session-client.mjs";
+import {
+  initializeLoadedDiscoveryChild,
+  publishLoadedDiscoveryPlan,
+  publishLoadedDiscoveryReport,
+  readLoadedDiscoveryPlan,
+} from "./loaded-discovery-store.mjs";
 import {
   buildSchema3BundleSummary,
   renderSchema3BundleSummary,
@@ -111,6 +126,11 @@ Usage:
   fault-affinity diagnose --resume DIR [--recipe ID | \\
     (--workload ID | --workload-file FILE) \\
       [--condition-workload ID | --condition-workload-file FILE]] --yes
+  fault-affinity loaded-discover [--recipe wasm-churn-aba] \\
+    [--profile quick|standard|full] \\
+    [--target-cpus LIST --load-cpus LIST] [--seed N] --out-dir DIR \\
+    (--dry-run | --yes)
+  fault-affinity loaded-discover --resume DIR [--recipe wasm-churn-aba] --yes
   fault-affinity inspect (--workload ID | --workload-file FILE) [--json]
   fault-affinity report --bundle-dir DIR \\
     ((--workload ID | --workload-file FILE) \\
@@ -151,6 +171,11 @@ The diagnose command creates combined schema-3 v7 campaigns. Its default
 wasm-churn-diagnose recipe uses the multi-phase WebAssembly churn workload,
 the yes-load condition, automatic reviewed host-topology planning, and the
 quick profile. Use --dry-run to inspect the complete plan before --yes.
+
+The optional loaded-discover command screens each detected E-core while
+verified load workers run on the detected P-cores, then recommends a fresh
+A1/B/A2 confirmation command. Automatic selection requires complete Linux
+hybrid-topology data; otherwise supply both CPU sets explicitly.
 
 The baseline command creates schema-3 v2 bundles. The groups command creates
 v3 bundles from a bounded plan file. The pinned command creates v4 bundles that
@@ -402,6 +427,76 @@ export function parseFaultAffinityArgs(argv) {
         targetCpu: parseCanonicalInteger(options.targetCpuText, "--target-cpu", 0, MAX_CPU_ID),
       }),
       ...(options.loadCpuSpec === undefined ? {} : {
+        loadCpus: parseCanonicalCpuList(options.loadCpuSpec, "--load-cpus"),
+        loadCpuSpec: options.loadCpuSpec,
+      }),
+      seed: parseCanonicalInteger(options.seedText ?? "17", "--seed", 0, MAX_SEED),
+      outDir: options.outDir,
+      tasksetPath: options.tasksetPath ?? DEFAULT_TASKSET_PATH,
+    });
+  }
+  if (command === "loaded-discover") {
+    const options = parseOptions(rest, new Map([
+      ["--recipe", "recipe"],
+      ["--profile", "profile"],
+      ["--target-cpus", "targetCpuSpec"],
+      ["--load-cpus", "loadCpuSpec"],
+      ["--seed", "seedText"],
+      ["--out-dir", "outDir"],
+      ["--resume", "resumeDir"],
+      ["--taskset", "tasksetPath"],
+    ]), new Map([
+      ["--quick", "quick"], ["--standard", "standard"], ["--full", "full"],
+      ["--dry-run", "dryRun"], ["--yes", "yes"],
+      ["--help", "help"], ["-h", "help"],
+    ]));
+    if (options.help) return Object.freeze({ command, help: true });
+    const recipe = options.recipe ?? LOADED_DISCOVERY_RECIPE;
+    if (recipe !== LOADED_DISCOVERY_RECIPE) {
+      fail(`loaded-discover --recipe must be ${LOADED_DISCOVERY_RECIPE}`);
+    }
+    const profileFlags = ["quick", "standard", "full"].filter((key) => options[key]);
+    if (profileFlags.length > 1 ||
+        (options.profile !== undefined && profileFlags.length > 0)) {
+      fail("choose at most one --profile, --quick, --standard, or --full");
+    }
+    const explicitProfile = options.profile ?? profileFlags[0];
+    if (explicitProfile !== undefined && CAMPAIGN_PROFILES[explicitProfile] === undefined) {
+      fail("--profile must be quick, standard, or full");
+    }
+    if ((options.targetCpuSpec === undefined) !== (options.loadCpuSpec === undefined)) {
+      fail("--target-cpus and --load-cpus must be supplied together");
+    }
+    if (options.resumeDir !== undefined) {
+      const fresh = [
+        "profile", "targetCpuSpec", "loadCpuSpec", "seedText", "outDir",
+        "tasksetPath", "quick", "standard", "full",
+      ].filter((key) => options[key] !== undefined);
+      if (fresh.length > 0) {
+        fail("--resume cannot be combined with fresh loaded-discover options");
+      }
+      if (!options.yes || options.dryRun) fail("a loaded-discover resume requires --yes");
+      return Object.freeze({
+        command,
+        mode: "resume",
+        recipe,
+        resumeDir: options.resumeDir,
+      });
+    }
+    if (options.outDir === undefined) {
+      fail("a fresh loaded-discover run requires --out-dir DIR");
+    }
+    if (Boolean(options.dryRun) === Boolean(options.yes)) {
+      fail("choose exactly one --dry-run or --yes for a fresh loaded-discover run");
+    }
+    return Object.freeze({
+      command,
+      mode: options.dryRun ? "dry-run" : "fresh",
+      recipe,
+      profile: explicitProfile ?? "quick",
+      ...(options.targetCpuSpec === undefined ? {} : {
+        targetCpus: parseCanonicalCpuList(options.targetCpuSpec, "--target-cpus"),
+        targetCpuSpec: options.targetCpuSpec,
         loadCpus: parseCanonicalCpuList(options.loadCpuSpec, "--load-cpus"),
         loadCpuSpec: options.loadCpuSpec,
       }),
@@ -877,7 +972,8 @@ function renderWorkload(selection) {
 function resolveRecipe(parsed) {
   if (parsed.recipe === undefined) return undefined;
   if (parsed.command === "diagnose" ||
-      listCampaignRecipes().some(({ id }) => id === parsed.recipe)) {
+      (parsed.command !== "loaded-discover" &&
+        listCampaignRecipes().some(({ id }) => id === parsed.recipe))) {
     return resolveCampaignRecipe(parsed.recipe);
   }
   return resolveControlledLoadRecipe(parsed.recipe);
@@ -1309,6 +1405,147 @@ async function runControlledLoadBundle({
   }
 }
 
+function sameCpuList(left, right) {
+  return left.length === right.length &&
+    left.every((cpu, index) => cpu === right[index]);
+}
+
+function loadedSessionDirectory(collectionDir, name) {
+  const requested = path.join(collectionDir, name);
+  let stat;
+  try {
+    stat = lstatSync(requested);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      fail("loaded-discover child directory could not be inspected: " +
+        (error?.code ?? "unknown error"));
+    }
+    return Object.freeze({
+      directory: createPrivateBundleDirectory(requested),
+      created: true,
+    });
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    fail("loaded-discover child '" + name + "' must be a real directory");
+  }
+  const canonical = realpathSync(requested);
+  if (canonical !== requested || path.dirname(canonical) !== collectionDir) {
+    fail("loaded-discover child '" + name + "' escapes its collection directory");
+  }
+  return Object.freeze({ directory: canonical, created: false });
+}
+
+function assertLoadedSessionBundle(plan, session, bundle) {
+  const controlled = bundle.controlledLoad;
+  const exact = bundle.exactCpu;
+  if (bundle.manifest.version !== 5 || controlled === undefined ||
+      controlled.manifest.execution.targetCpu !== session.targetCpu ||
+      !sameCpuList(controlled.manifest.execution.workerCpus, plan.topology.loadCpus) ||
+      controlled.manifest.execution.tasksetPath !== plan.execution.tasksetPath ||
+      controlled.manifest.schedule.attemptsPerLeg !== plan.schedule.attemptsPerLeg ||
+      controlled.manifest.schedule.warmupMs !== plan.schedule.warmupMs ||
+      controlled.manifest.schedule.recoveryMs !== plan.schedule.recoveryMs ||
+      !sameCpuList(exact.manifest.schedule.cpus, [session.targetCpu]) ||
+      exact.manifest.schedule.rounds !== 1 ||
+      exact.manifest.schedule.seed !== plan.schedule.seed ||
+      exact.manifest.execution.tasksetPath !== plan.execution.tasksetPath) {
+    fail("loaded-discover child for CPU " + session.targetCpu + " does not match its plan");
+  }
+}
+
+async function runLoadedDiscoveryCollection({
+  selection,
+  auxiliarySelection,
+  collectionDir,
+  plan,
+  signalSource,
+  writeOut,
+  writeErr,
+}) {
+  const forwarding = installSignalForwarding(signalSource);
+  const bundles = [];
+  try {
+    for (const session of plan.schedule.sessions) {
+      if (forwarding.signal.aborted) return signalExitCode(forwarding.received());
+      const child = loadedSessionDirectory(collectionDir, session.directory);
+      const recipePlan = buildControlledLoadRecipePlan(plan.recipe, {
+        targetCpu: session.targetCpu,
+        loadCpus: plan.topology.loadCpus,
+        attemptsPerLeg: plan.schedule.attemptsPerLeg,
+        warmupMs: plan.schedule.warmupMs,
+        recoveryMs: plan.schedule.recoveryMs,
+        exactCpus: [session.targetCpu],
+        exactRounds: 1,
+        seed: plan.schedule.seed,
+      });
+      const manifest = buildFreshControlledLoadManifest(
+        selection.resolved,
+        auxiliarySelection.resolved,
+        recipePlan.plan,
+        plan.execution.tasksetPath,
+        false,
+      );
+      let bundle = await initializeLoadedDiscoveryChild({
+        resolved: selection.resolved,
+        auxiliary: auxiliarySelection.resolved,
+        manifest,
+        bundleDir: child.directory,
+      });
+      assertLoadedSessionBundle(plan, session, bundle);
+      writeOut("loaded screen " + session.ordinal + "/" + plan.schedule.sessions.length +
+        " target=" + session.targetCpu + " controller=" + session.controllerCpu +
+        " workers=" + compressCpuList(plan.topology.loadCpus) + "\n");
+      if (!bundle.controlledLoad.progress.complete) {
+        const execution = await runLoadedDiscoverySessionProcess({
+          measuredSelection: selection,
+          auxiliarySelection,
+          bundleDir: child.directory,
+          controllerCpu: session.controllerCpu,
+          tasksetPath: plan.execution.tasksetPath,
+          signal: forwarding.signal,
+        });
+        bundle = await readSchema3Bundle({
+          resolved: selection.resolved,
+          auxiliary: auxiliarySelection.resolved,
+          bundleDir: child.directory,
+        });
+        assertLoadedSessionBundle(plan, session, bundle);
+        if (forwarding.signal.aborted) return signalExitCode(forwarding.received());
+        if (!execution.record.committed &&
+            !(execution.record.reason === "complete" &&
+              bundle.controlledLoad.progress.complete)) {
+          if (execution.stderr.length > 0) writeErr(execution.stderr);
+          writeErr("loaded screen for CPU " + session.targetCpu + " was not committed: " +
+            execution.record.reason +
+            (execution.record.stage === null ? "" : " stage=" + execution.record.stage) +
+            (execution.record.errorCode === null
+              ? "" : " (" + execution.record.errorCode + ")") +
+            (execution.record.detail === null ? "" : "; " + execution.record.detail) + "\n");
+          return execution.record.errorCode === "BUNDLE_EXECUTION_LEASE_BUSY" ? 75 : 1;
+        }
+      }
+      const summaries = bundle.controlledLoad.envelope.legs
+        .map((leg) => leg.leg + ":" + controlledLegOutcomeSummary(leg))
+        .join(" ");
+      writeOut("complete loaded target=" + session.targetCpu + " " + summaries + "\n");
+      bundles.push(bundle);
+    }
+    const report = buildLoadedDiscoveryReport(plan, bundles);
+    if (!report.complete) {
+      writeErr("loaded-discover sessions finished without a complete reportable collection\n");
+      return 1;
+    }
+    const artifacts = await publishLoadedDiscoveryReport(collectionDir, report);
+    writeOut("loaded discovery complete: " + collectionDir + "\n");
+    writeOut("final reports: " + path.join(collectionDir, artifacts.markdown) + " and " +
+      path.join(collectionDir, artifacts.json) + "\n");
+    writeOut(renderLoadedDiscoveryConsoleSummary(report, collectionDir));
+    return 0;
+  } finally {
+    forwarding.remove();
+  }
+}
+
 async function runDebuggerBundle({
   resolved,
   bundleDir,
@@ -1542,7 +1779,8 @@ async function runPinnedBundle({
       const errorCode = execution.record.errorCode;
       if (execution.stderr.length > 0) writeErr(execution.stderr);
       writeErr(`pinned-concurrent wave was not committed: ${execution.record.reason}` +
-        `${errorCode === null ? "" : ` (${errorCode})`}\n`);
+        `${errorCode === null ? "" : ` (${errorCode})`}` +
+        `${execution.record.detail == null ? "" : `; ${execution.record.detail}`}\n`);
       return errorCode === "BUNDLE_EXECUTION_LEASE_BUSY" ? 75 : 1;
     }
     const { committedWaves, totalWaves, committedAttempts, totalAttempts } =
@@ -1604,6 +1842,16 @@ async function runCampaignBundle({
   writeOut(`campaign complete: ${bundleDir}\n`);
   writeOut(`final reports: ${path.join(bundleDir, artifacts.markdown)} and ` +
     `${path.join(bundleDir, artifacts.json)}\n`);
+  const candidate = selectStrongestCampaignCandidate(report);
+  writeOut(renderCampaignCandidateSummary(report, {
+    outDir: candidate === null
+      ? `${bundleDir}-confirm`
+      : `${bundleDir}-confirm-cpu${candidate.cpu}`,
+    selectionSources: {
+      measured: selection.source,
+      condition: auxiliarySelection.source,
+    },
+  }));
   return 0;
 }
 
@@ -1700,6 +1948,104 @@ export async function runFaultAffinityCli(argv, io = {}) {
         ? `${JSON.stringify(report, null, 2)}\n`
         : renderCampaignReportMarkdown(report));
       return 0;
+    }
+    if (parsed.command === "loaded-discover") {
+      assertExactCapability(selection);
+      const conditionSelection = resolveConditionSelection(parsed, cwd);
+      if (conditionSelection === undefined) {
+        fail("loaded-discover requires a condition workload");
+      }
+      assertControlledLoadCondition(conditionSelection);
+      if (parsed.mode !== "dry-run") {
+        assertAutomationBoundary(selection);
+        assertAutomationBoundary(conditionSelection);
+      }
+      if (parsed.mode === "resume") {
+        const collectionDir = resolveExistingBundleDirectory(
+          path.resolve(cwd, parsed.resumeDir),
+        );
+        const plan = await readLoadedDiscoveryPlan(collectionDir);
+        if (plan.recipe !== parsed.recipe) {
+          fail("loaded-discover resume recipe does not match its stored plan");
+        }
+        const tasksetPath = resolveExecutablePath(
+          plan.execution.tasksetPath,
+          "stored loaded-discover taskset",
+        );
+        if (tasksetPath !== plan.execution.tasksetPath) {
+          fail("stored loaded-discover taskset path is no longer canonical");
+        }
+        ensureAllowedCpus([
+          ...plan.topology.targetCpus,
+          ...plan.topology.loadCpus,
+          ...plan.schedule.sessions.map(({ controllerCpu }) => controllerCpu),
+        ], io.allowedCpuSpec);
+        writeOut("resuming loaded discovery measured=" + selection.resolved.id +
+          " condition=" + conditionSelection.resolved.id +
+          " collection=" + collectionDir + "\n");
+        return await runLoadedDiscoveryCollection({
+          selection,
+          auxiliarySelection: conditionSelection,
+          collectionDir,
+          plan,
+          signalSource,
+          writeOut,
+          writeErr,
+        });
+      }
+
+      const tasksetPath = resolveExecutablePath(parsed.tasksetPath, "--taskset");
+      const topology = discoverCampaignTopology(topologyOptions);
+      const plan = buildLoadedDiscoveryPlanFromTopology(topology, {
+        recipe: parsed.recipe,
+        profile: parsed.profile,
+        targetCpus: parsed.targetCpus,
+        loadCpus: parsed.loadCpus,
+        seed: parsed.seed,
+        tasksetPath,
+      });
+      const allowedCpuSpec = ensureAllowedCpus([
+        ...plan.topology.targetCpus,
+        ...plan.topology.loadCpus,
+        ...plan.schedule.sessions.map(({ controllerCpu }) => controllerCpu),
+      ], io.allowedCpuSpec);
+      writeOut("loaded discovery plan\n");
+      writeOut("  recipe: " + plan.recipe + "\n");
+      writeOut("  profile: " + plan.profile + "\n");
+      writeOut("  topology: " + plan.topology.source + "\n");
+      writeOut("  screen targets: " + compressCpuList(plan.topology.targetCpus) + "\n");
+      writeOut("  verified load workers: " + compressCpuList(plan.topology.loadCpus) + "\n");
+      writeOut("  sessions: " + plan.schedule.sessions.length +
+        "; " + plan.schedule.attemptsPerLeg + " attempt(s) per A1/B/A2 leg\n");
+      writeOut("  timing: warmup " + plan.schedule.warmupMs +
+        " ms; recovery " + plan.schedule.recoveryMs + " ms per target\n");
+      writeOut("  host allowance: " + allowedCpuSpec + "\n");
+      for (const session of plan.schedule.sessions) {
+        writeOut("    " + session.ordinal + ". target CPU " + session.targetCpu +
+          "; controller CPU " + session.controllerCpu + "\n");
+      }
+      const requestedCollection = path.resolve(cwd, parsed.outDir);
+      writeOut("planned collection: " + requestedCollection + "\n");
+      if (parsed.mode === "dry-run") {
+        writeOut("dry run: no workload executed and no collection created\n");
+        return 0;
+      }
+
+      const collectionDir = createPrivateBundleDirectory(requestedCollection);
+      await publishLoadedDiscoveryPlan(collectionDir, plan);
+      writeOut("starting loaded discovery measured=" + selection.resolved.id +
+        " condition=" + conditionSelection.resolved.id +
+        " collection=" + collectionDir + "\n");
+      writeOut("Each target is a separate resumable A1/B/A2 evidence bundle.\n");
+      return await runLoadedDiscoveryCollection({
+        selection,
+        auxiliarySelection: conditionSelection,
+        collectionDir,
+        plan,
+        signalSource,
+        writeOut,
+        writeErr,
+      });
     }
     if (parsed.command === "diagnose") {
       assertPinnedCapabilities(selection);

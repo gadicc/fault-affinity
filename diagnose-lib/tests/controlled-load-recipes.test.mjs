@@ -10,7 +10,11 @@ import {
 
 test("the WebAssembly controlled-load recipe publishes explicit identities and bounded defaults", () => {
   const listed = listControlledLoadRecipes();
-  assert.deepEqual(listed.map(({ id }) => id), ["wasm-churn-aba"]);
+  assert.deepEqual(listed.map(({ id }) => id), [
+    "wasm-churn-aba",
+    "wasm-churn-suite-aba",
+    "node-pglite-suite-aba",
+  ]);
   assert.equal(listed[0].measuredWorkload, "wasm-churn");
   assert.equal(listed[0].conditionWorkload, "yes-load");
   assert.deepEqual(listed[0].required, ["targetCpu", "loadCpus"]);
@@ -29,6 +33,11 @@ test("the WebAssembly controlled-load recipe publishes explicit identities and b
     recoveryMs: 15_000,
   });
   assert.deepEqual(plan.exact, { cpus: [19], rounds: 10, seed: 17 });
+
+  assert.equal(resolveControlledLoadRecipe("wasm-churn-suite-aba").measuredWorkload,
+    "wasm-churn-suite");
+  assert.equal(resolveControlledLoadRecipe("node-pglite-suite-aba").measuredWorkload,
+    "node-pglite-suite");
 });
 
 test("controlled-load recipe overrides remain validated by the canonical plan boundary", () => {

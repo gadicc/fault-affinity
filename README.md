@@ -15,7 +15,16 @@ WebAssembly churn workload.
 
 ## Quick start
 
-Plan the complete reduced campaign without executing anything:
+Using Windows and looking for the simplest comparison? Start with the
+[Ubuntu live reference kit](docs/live-kit.md). It explains how to boot an
+official Ubuntu USB in **Try Ubuntu** mode, open Terminal, paste three safe
+preview commands, and save or upload the result. No Linux experience, Node,
+npm, or Git installation is required. The public download is still disabled
+until the documented live-session acceptance check passes.
+
+Already on Linux with Node and a repository checkout? Start with a dry run. It
+checks the machine and shows the complete plan without executing a workload or
+creating a results directory:
 
 ```sh
 node fault-affinity.mjs diagnose \
@@ -28,6 +37,22 @@ multi-phase WebAssembly churn workload, verified `yes-load` condition, and
 bounded `quick` profile. It discovers the online CPUs available to the invoking
 process, displays CPU classes and groups, plans an exact sweep over every usable
 logical CPU, and chooses a focused controlled-load target.
+
+If you do not know the affected CPU and suspect that other-core activity is
+important, use the optional loaded screen instead. On a supported hybrid
+system it tests every detected E-core while verified load runs on the detected
+P-cores:
+
+```sh
+node fault-affinity.mjs loaded-discover \
+  --out-dir diagnostics/wasm-loaded-discovery \
+  --dry-run
+```
+
+Review either plan, close valuable work, then replace `--dry-run` with `--yes`.
+Both workflows are resumable. Read the
+[loaded discovery guide](docs/guides/loaded-discovery.md) when choosing a CPU
+from scratch; it explains the final ranking and confirmation command.
 
 The default target is the highest usable CPU for determinism, not because the
 harness considers it suspect. Preserve a known target explicitly; CPU 19 was
@@ -93,6 +118,7 @@ The public command owns schema-3 manifest versions 1 through 7:
 | Workflow | Role | Guide |
 | --- | --- | --- |
 | `diagnose` | Complete topology, exact-CPU, and focused-load campaign with final statistics | [Generic campaign](docs/guides/generic-diagnose-campaign.md) |
+| `loaded-discover` | Optional every-E-core screen under verified P-core load | [Loaded discovery](docs/guides/loaded-discovery.md) |
 | `exact` | Focused or every-CPU isolated schedule | [Exact CPU](docs/guides/generic-exact-cpu.md) |
 | `baseline` | Correlated concurrent waves | [Baseline](docs/guides/generic-baseline.md) |
 | `groups` | Explicit overlapping CPU-group contexts | [CPU groups](docs/guides/generic-cpu-groups.md) |
@@ -116,8 +142,10 @@ node fault-affinity.mjs --help
 under distinct identities. Use a versioned workload JSON file to supply a
 trusted local script or binary; see the [workload catalog](workloads/README.md).
 
-The v7 campaign report covers topology and focused-load statistics. It does not
-add generic telemetry, debugger transcripts, frequency experiments, or a
+The v7 campaign report covers topology and focused-load statistics. The
+separate `loaded-discover` collection screens every selected target under the
+same verified load set. Neither workflow adds generic telemetry, debugger
+transcripts, frequency experiments, or a
 privacy-review inventory. Those remain separate workflows where available.
 
 ## Historical Node/PGlite reproduction
@@ -154,9 +182,10 @@ The first distribution target is a self-contained Linux x86-64 kit for an
 official Ubuntu Desktop live session. It pins both the controller and reference
 Node runtimes, PGlite, and the A/B/A schedule, so a Windows user can collect a
 fixed known-target result without installing Node, npm, Git, or a compiler on
-Windows. It is not yet the general start-from-scratch discovery workflow.
-The bootstrap only downloads and verifies the kit; running the workload still
-requires a separate, explicit `--yes` confirmation.
+Windows. The optional `loaded-discover` command is the general
+start-from-scratch loaded screen when the kit contains a release that supports
+it. The bootstrap only downloads and verifies the kit; running the workload
+still requires a separate, explicit `--yes` confirmation.
 
 Public release publication is deliberately disabled until live-session,
 recovery, and repository-protection acceptance gates are complete. See

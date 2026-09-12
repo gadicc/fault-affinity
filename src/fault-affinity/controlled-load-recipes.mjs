@@ -26,6 +26,34 @@ const RECIPES = Object.freeze({
       seed: 17,
     }),
   }),
+  "wasm-churn-suite-aba": Object.freeze({
+    id: "wasm-churn-suite-aba",
+    label: "WebAssembly churn campaign identity under controlled load",
+    description: "A1/B/A2 confirmation that preserves the wasm-churn-suite campaign workload identity.",
+    measuredWorkload: "wasm-churn-suite",
+    conditionWorkload: DEFAULT_CONTROLLED_LOAD_CONDITION,
+    defaults: Object.freeze({
+      attemptsPerLeg: 10,
+      warmupMs: 0,
+      recoveryMs: 15_000,
+      exactRounds: 10,
+      seed: 17,
+    }),
+  }),
+  "node-pglite-suite-aba": Object.freeze({
+    id: "node-pglite-suite-aba",
+    label: "Node/PGlite campaign identity under controlled load",
+    description: "Historical heavyweight A1/B/A2 confirmation that preserves the node-pglite-suite campaign workload identity.",
+    measuredWorkload: "node-pglite-suite",
+    conditionWorkload: DEFAULT_CONTROLLED_LOAD_CONDITION,
+    defaults: Object.freeze({
+      attemptsPerLeg: 10,
+      warmupMs: 0,
+      recoveryMs: 15_000,
+      exactRounds: 10,
+      seed: 17,
+    }),
+  }),
 });
 
 export class ControlledLoadRecipeError extends Error {

@@ -201,6 +201,14 @@ root artifacts. The report is reproducible from validated phase evidence and
 does not replace it as the authority. See
 [run a generic diagnostic campaign](../guides/generic-diagnose-campaign.md).
 
+A `loaded-discover` output directory is a collection, not one schema-3 bundle.
+Its immutable `loaded-discovery.json` plan binds the target order, load CPUs,
+controller placement, timings, and `taskset` path. Each `cpu-00019`-style directory
+is an authoritative manifest-v5 child bundle. Once every child completes, the
+collection publishes `loaded-discovery-report.json` and
+`loaded-discovery-report.md`; these reports summarize the validated children
+but do not replace their evidence.
+
 All schema-3 manifest versions may also contain the optional root file
 `attempt-armed.json`. The bundle owner publishes it durably, under the exclusive
 execution lease, immediately before entering one scheduled phase unit. It binds

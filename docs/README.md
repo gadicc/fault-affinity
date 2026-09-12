@@ -13,6 +13,7 @@ This index separates instructions for running the current tooling from the resul
 
 - [Use the Ubuntu live reference kit](live-kit.md): zero-install verified download, dry-run-first A/B/A reference collection, persistent result storage, and USB or browser-assisted result handoff
 - [Run a generic diagnostic campaign](guides/generic-diagnose-campaign.md): automatic topology planning, built-in reduced and historical recipes, schema-3 v7 resume, every-CPU localization, focused load, and final statistical reports
+- [Find a load-sensitive CPU from scratch](guides/loaded-discovery.md): automatic hybrid-CPU screening, verified load, resumable A1/B/A2 sessions, ranking, and an independent confirmation command
 - [Run a generic exact-CPU workload](guides/generic-exact-cpu.md): built-in and custom workload selection, dry runs, live execution, and schema-3 resume
 - [Run generic baseline waves](guides/generic-baseline.md): correlated-wave planning, schema-3 v2 creation, resume, and its bound exact phase
 - [Run generic CPU-group waves](guides/generic-cpu-groups.md): explicit topology plans, schema-3 v3 creation, whole-wave resume, and sibling phases
