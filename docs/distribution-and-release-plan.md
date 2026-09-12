@@ -547,6 +547,13 @@ the exact dry-run plan without Git, npm, a compiler, or root, and prepare and
 independently verify an allowlisted share archive. Ubuntu 24.04 remains a
 compatibility target until manually accepted.
 
+Automate the first half against the pinned, unmodified Ubuntu Desktop ISO in a
+local QEMU serial session: stock dependency discovery, candidate checksum and
+safe extraction, bundled runtime/help checks, an ext4-backed dry run, and proof
+that the dry run created no result content. This does not replace the manual
+checks for GRUB and desktop startup, physical removable media, a deliberately
+confirmed reference run, result preparation, or Windows-side transfer.
+
 ### Milestone 2: Pages bootstrap and first release
 
 - Add the static Pages site and hardened downloader.

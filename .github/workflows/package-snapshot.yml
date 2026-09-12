@@ -65,11 +65,26 @@ jobs:
           printf 'Acceptance candidate `%s` for commit `%s`\n' \
             "$candidate_version" "$SOURCE_COMMIT" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Add self-contained acceptance support
+        run: |
+          install -m 0644 packaging/safe-extract.py \
+            "$RUNNER_TEMP/acceptance/safe-extract.py"
+          install -m 0644 packaging/templates/ACCEPTANCE.txt \
+            "$RUNNER_TEMP/acceptance/ACCEPTANCE.txt"
+          install -m 0644 packaging/templates/acceptance-vm.sh \
+            "$RUNNER_TEMP/acceptance/acceptance-vm.sh"
+          (cd "$RUNNER_TEMP/acceptance" && \
+            sha256sum ACCEPTANCE.txt acceptance-vm.sh safe-extract.py \
+              > ACCEPTANCE-SUPPORT-SHA256SUMS)
+
       - name: Verify candidate bytes and harmless launcher output
         run: |
-          (cd "$RUNNER_TEMP/acceptance" && sha256sum --check SHA256SUMS)
+          sh -n "$RUNNER_TEMP/acceptance/acceptance-vm.sh"
+          (cd "$RUNNER_TEMP/acceptance" && \
+            sha256sum --check ACCEPTANCE-SUPPORT-SHA256SUMS && \
+            sha256sum --check SHA256SUMS)
           mkdir "$RUNNER_TEMP/candidate-smoke"
-          python3 packaging/safe-extract.py \
+          python3 "$RUNNER_TEMP/acceptance/safe-extract.py" \
             "$RUNNER_TEMP/acceptance/fault-affinity-live-linux-x64.tar.gz" \
             "$RUNNER_TEMP/candidate-smoke"
           "$RUNNER_TEMP/candidate-smoke/fault-affinity/runtime/controller/bin/node" --version

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -28,6 +30,11 @@ import { calculateReleasePlan } from "../release-plan.mjs";
 import { publishPlannedRelease } from "../publish-release.mjs";
 import { readReleaseReadiness } from "../release-readiness.mjs";
 import { validateRecoveryRunProvenance } from "../validate-recovery-run.mjs";
+import {
+  buildGuestStartCommand,
+  buildQemuArguments,
+  parseLiveIsoAcceptanceArguments,
+} from "../live-iso-acceptance.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -41,6 +48,19 @@ test("the reviewed runtime lock contains exact platform roles", () => {
   assert.equal(lock.platforms["linux-x64"].reference.version, "v25.2.1");
   assert.equal(lock.platforms["windows-x64"].controller.sha256,
     "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541");
+});
+
+test("the live ISO lock pins the accepted Ubuntu Desktop image", () => {
+  const iso = JSON.parse(readFileSync(path.join(repositoryRoot,
+    "packaging/live-iso-lock.json"), "utf8"));
+  assert.deepEqual(iso, {
+    schemaVersion: 1,
+    filename: "ubuntu-26.04.1-desktop-amd64.iso",
+    bytes: 6482409472,
+    sha256: "601e30fbf5d97759367c632e2c33630665039b7e2158fd068403da3ccf1bda1f",
+    volumeId: "Ubuntu 26.04.1 LTS amd64",
+    releasePage: "https://releases.ubuntu.com/26.04.1/",
+  });
 });
 
 test("public publication remains blocked until every named acceptance gate is true", () => {
@@ -307,7 +327,7 @@ test("dev snapshots upload a finalized non-publishing acceptance candidate", () 
   assert.match(workflow, /node packaging\/finalize-release\.mjs/);
   assert.match(workflow, /candidate_version="0\.1\.0-dev\.\$\{SOURCE_COMMIT:0:12\}"/);
   assert.match(workflow, /sha256sum --check SHA256SUMS/);
-  assert.match(workflow, /python3 packaging\/safe-extract\.py/);
+  assert.match(workflow, /python3 "\$RUNNER_TEMP\/acceptance\/safe-extract\.py"/);
   assert.match(workflow, /name: linux-x64-acceptance-\$\{\{ github\.sha \}\}/);
   assert.doesNotMatch(workflow, /contents:\s*write/);
   assert.doesNotMatch(workflow, /gh release|semantic-release|publish-release/);
@@ -323,6 +343,86 @@ test("dev snapshots upload a finalized non-publishing acceptance candidate", () 
       (trigger.endsWith("/**") && source.startsWith(trigger.slice(0, -2)))),
     `snapshot workflow does not cover packaged source ${source}`);
   }
+});
+
+test("dev snapshot support is self-contained and remains harmless", () => {
+  const workflow = readFileSync(path.join(repositoryRoot,
+    ".github/workflows/package-snapshot.yml"), "utf8");
+  assert.match(workflow, /acceptance\/safe-extract\.py/);
+  assert.match(workflow, /acceptance\/ACCEPTANCE\.txt/);
+  assert.match(workflow, /acceptance\/acceptance-vm\.sh/);
+  assert.match(workflow, /ACCEPTANCE-SUPPORT-SHA256SUMS/);
+
+  const guest = readFileSync(path.join(repositoryRoot,
+    "packaging/templates/acceptance-vm.sh"), "utf8");
+  assert.match(guest, /systemd-detect-virt/);
+  assert.match(guest, /kvm\|qemu/);
+  assert.match(guest, /kvm\|qemu[\s\S]+trap finish EXIT/);
+  assert.match(guest, /VERSION_ID:-.*26\.04/);
+  assert.match(guest, /sha256sum --check ACCEPTANCE-SUPPORT-SHA256SUMS/);
+  assert.match(guest, /sha256sum --check SHA256SUMS/);
+  assert.match(guest, /safe-extract\.py/);
+  assert.match(guest, /before_inventory[\s\S]+after_inventory/);
+  assert.match(guest, /--dry-run/);
+  assert.doesNotMatch(guest, /--yes|child\.mjs|yes-load|PGlite/);
+
+  const fixture = temporaryDirectory("rejected-acceptance-helper");
+  try {
+    const sudoMarker = path.join(fixture, "sudo-was-called");
+    writeFileSync(path.join(fixture, "systemd-detect-virt"), "#!/bin/sh\nprintf 'none\\n'\n");
+    writeFileSync(path.join(fixture, "sudo"), "#!/bin/sh\n: > \"$SUDO_MARKER\"\n");
+    chmodSync(path.join(fixture, "systemd-detect-virt"), 0o755);
+    chmodSync(path.join(fixture, "sudo"), 0o755);
+    const rejected = spawnSync("/bin/sh", [path.join(repositoryRoot,
+      "packaging/templates/acceptance-vm.sh"), fixture], {
+      encoding: "utf8",
+      env: { PATH: fixture, SUDO_MARKER: sudoMarker },
+    });
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stderr, /only inside QEMU\/KVM/);
+    assert.doesNotMatch(rejected.stdout, /FAULT_AFFINITY_VM_STATUS/);
+    assert.equal(existsSync(sudoMarker), false);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("live ISO acceptance builds a serial-only QEMU dry-run boundary", () => {
+  const options = parseLiveIsoAcceptanceArguments([
+    "--iso", "/images/ubuntu.iso",
+    "--candidate-dir", "/candidate",
+    "--output-dir", "/output",
+  ]);
+  assert.equal(options.cpus, 4);
+  assert.equal(options.memoryMiB, 4096);
+  assert.equal(options.timeoutSeconds, 900);
+  assert.throws(() => parseLiveIsoAcceptanceArguments([
+    "--iso", "/images/ubuntu.iso",
+    "--candidate-dir", "/candidate",
+    "--output-dir", "/output",
+    "--cpus", "3",
+  ]), /--cpus must be from 4 through 64/);
+
+  const qemu = buildQemuArguments({
+    iso: "/images/ubuntu.iso",
+    candidateIso: "/scratch/candidate.iso",
+    resultsDisk: "/scratch/results.ext4",
+    kernel: "/scratch/vmlinuz",
+    initrd: "/scratch/initrd",
+    cpus: 4,
+    memoryMiB: 4096,
+    acceleration: "tcg",
+  });
+  assert.ok(qemu.includes("q35,accel=tcg"));
+  assert.ok(qemu.some((argument) => argument.includes("systemd.unit=multi-user.target")));
+  assert.ok(qemu.includes("stdio"));
+  assert.ok(qemu.some((argument) => argument.includes("candidate.iso") &&
+    argument.includes("readonly=on")));
+  assert.ok(qemu.some((argument) => argument.includes("results.ext4") &&
+    argument.includes("if=virtio")));
+  const guestStart = buildGuestStartCommand();
+  assert.match(guestStart, /trap .*FAULT_AFFINITY_VM_STATUS/);
+  assert.doesNotMatch(guestStart, /trap - EXIT|--yes|child\.mjs|yes-load|PGlite/);
 });
 
 test("semantic-release guard enforces planned version and commit before publish", async () => {
