@@ -74,10 +74,61 @@ test("public publication remains blocked until every named acceptance gate is tr
   assert.equal(readiness.publicReleaseEnabled, false);
   assert.deepEqual(readiness.gates, {
     resultPreparationLeaseVerified: true,
-    ubuntu2604LiveAcceptance: false,
+    ubuntu2604LiveAcceptance: true,
     releaseRecoveryRehearsal: true,
     remoteProtectionsConfirmed: false,
   });
+});
+
+test("accepted live ISO evidence is bound to the pinned image and a harmless dry run", () => {
+  const evidence = JSON.parse(readFileSync(path.join(repositoryRoot,
+    "packaging/acceptance/live-iso-20260912.json"), "utf8"));
+  const iso = JSON.parse(readFileSync(path.join(repositoryRoot,
+    "packaging/live-iso-lock.json"), "utf8"));
+  const transcript = readFileSync(path.join(repositoryRoot,
+    "packaging/acceptance/live-iso-20260912-transcript.txt"), "utf8");
+  assert.equal(evidence.schemaVersion, 1);
+  assert.equal(evidence.status, "passed");
+  assert.deepEqual(evidence.iso, {
+    filename: iso.filename,
+    bytes: iso.bytes,
+    sha256: iso.sha256,
+    volumeId: iso.volumeId,
+  });
+  assert.match(evidence.candidate.sourceCommit, /^[0-9a-f]{40}$/);
+  assert.equal(evidence.candidate.releaseVersion,
+    `0.1.0-dev.${evidence.candidate.sourceCommit.slice(0, 12)}`);
+  for (const digest of [
+    evidence.candidate.archiveSha256,
+    evidence.candidate.supportManifestSha256,
+    evidence.candidate.acceptanceHelperSha256,
+    evidence.candidate.extractorSha256,
+    evidence.hostHarness.sha256,
+  ]) assert.match(digest, /^[0-9a-f]{64}$/);
+  assert.deepEqual(evidence.vm, {
+    cpus: 4,
+    memoryMiB: 4096,
+    timeoutSeconds: 900,
+    acceleration: "kvm",
+    qemuVersion: "QEMU emulator version 11.1.1",
+  });
+  assert.deepEqual(evidence.checks, [
+    "pinned ISO identity",
+    "stock live-image dependencies",
+    "read-only candidate support checksums",
+    "final release checksums",
+    "structured safe extraction",
+    "bundled runtime versions",
+    "launcher help",
+    "result preparer help",
+    "ext4-backed dry run",
+    "dry run created no result content",
+  ]);
+  assert.match(transcript, /Fault Affinity reference dry run/);
+  assert.match(transcript, /Nothing was executed\./);
+  assert.match(transcript, /FAULT_AFFINITY_VM_ACCEPTANCE_OK/);
+  assert.match(transcript, /FAULT_AFFINITY_VM_STATUS=0/);
+  assert.doesNotMatch(transcript, /machineid|bootid|sessionid/);
 });
 
 test("accepted release-recovery evidence records every remote state and exact digest", () => {

@@ -114,6 +114,10 @@ hosted disk is constrained, and nested acceleration is not a stable contract.
 If repeated remote runs become useful, use a manually dispatched job on a
 self-hosted KVM runner with the reviewed ISO already present.
 
+The accepted 12 September 2026 run, exact snapshot artifact, and
+privacy-minimized serial excerpt are recorded in
+[the live-ISO acceptance evidence](../docs/live-iso-acceptance.md).
+
 ## Rehearse release recovery safely
 
 Run the recovery state machine against GitHub before enabling stable releases.

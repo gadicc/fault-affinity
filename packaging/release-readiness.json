@@ -3,7 +3,7 @@
   "publicReleaseEnabled": false,
   "gates": {
     "resultPreparationLeaseVerified": true,
-    "ubuntu2604LiveAcceptance": false,
+    "ubuntu2604LiveAcceptance": true,
     "releaseRecoveryRehearsal": true,
     "remoteProtectionsConfirmed": false
   }
