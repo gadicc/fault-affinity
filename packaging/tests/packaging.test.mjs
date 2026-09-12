@@ -68,16 +68,65 @@ test("the live ISO lock pins the accepted Ubuntu Desktop image", () => {
   });
 });
 
-test("public publication remains blocked until every named acceptance gate is true", () => {
+test("public publication is enabled only with every named acceptance gate true", () => {
   const readiness = readReleaseReadiness(path.join(repositoryRoot,
     "packaging/release-readiness.json"));
-  assert.equal(readiness.publicReleaseEnabled, false);
+  assert.equal(readiness.publicReleaseEnabled, true);
   assert.deepEqual(readiness.gates, {
     resultPreparationLeaseVerified: true,
     ubuntu2604LiveAcceptance: true,
     releaseRecoveryRehearsal: true,
-    remoteProtectionsConfirmed: false,
+    remoteProtectionsConfirmed: true,
   });
+});
+
+test("accepted remote protections preserve promotion, release, tag, and recovery bounds", () => {
+  const evidence = JSON.parse(readFileSync(path.join(repositoryRoot,
+    "packaging/acceptance/remote-protections-20260912.json"), "utf8"));
+  assert.equal(evidence.schemaVersion, 1);
+  assert.equal(evidence.status, "passed");
+  assert.equal(evidence.repository.fullName, "gadicc/fault-affinity");
+  assert.equal(evidence.repository.defaultBranch, "main");
+  assert.deepEqual(evidence.repository.directWriters, [
+    { login: "gadicc", id: 381978, role: "admin" },
+  ]);
+  assert.deepEqual(Object.keys(evidence.branches).sort(), ["dev", "main"]);
+  for (const protection of Object.values(evidence.branches)) {
+    assert.equal(protection.pullRequestRequired, true);
+    assert.equal(protection.dismissStaleReviews, true);
+    assert.equal(protection.strictStatusChecks, true);
+    assert.equal(protection.enforceAdmins, true);
+    assert.equal(protection.allowForcePushes, false);
+    assert.equal(protection.allowDeletions, false);
+    assert.equal(protection.requiredConversationResolution, true);
+  }
+  assert.deepEqual(evidence.branches.main.requiredStatusChecks.map(({ context }) => context),
+    ["Safe validation", "Main receives promotions or hotfixes"]);
+  assert.deepEqual(evidence.branches.dev.requiredStatusChecks.map(({ context }) => context),
+    ["Safe validation"]);
+  assert.deepEqual(evidence.tagRuleset, {
+    id: 23068036,
+    name: "Protect stable release tags",
+    target: "tag",
+    sourceType: "Repository",
+    enforcement: "active",
+    include: ["refs/tags/v*"],
+    exclude: [],
+    rules: ["update", "deletion"],
+    bypassActors: [],
+    creationRestricted: false,
+  });
+  assert.deepEqual(evidence.immutableReleases,
+    { enabled: true, enforcedByOwner: false });
+  assert.equal(evidence.stableReleaseEnvironment.name, "stable-release");
+  assert.deepEqual(evidence.stableReleaseEnvironment.requiredReviewers,
+    [{ type: "User", login: "gadicc", id: 381978 }]);
+  assert.equal(evidence.stableReleaseEnvironment.protectedBranches, true);
+  assert.ok(evidence.artifactAndLogRetention.days >=
+    evidence.artifactAndLogRetention.requiredRecoveryDays);
+  assert.equal(evidence.baselineTag.name, "v0.0.0");
+  assert.match(evidence.baselineTag.annotatedObjectSha, /^[0-9a-f]{40}$/);
+  assert.match(evidence.baselineTag.commitSha, /^[0-9a-f]{40}$/);
 });
 
 test("accepted live ISO evidence is bound to the pinned image and a harmless dry run", () => {
@@ -439,6 +488,11 @@ test("recovery binds one artifact to the trusted completed main release run", ()
   const manual = structuredClone(fixture);
   manual.run.event = "workflow_dispatch";
   assert.equal(validateRecoveryRunProvenance(manual).artifactId, "54321");
+  for (const conclusion of ["success", "cancelled", "timed_out"]) {
+    const recoverable = structuredClone(fixture);
+    recoverable.run.conclusion = conclusion;
+    assert.equal(validateRecoveryRunProvenance(recoverable).artifactId, "54321");
+  }
 });
 
 test("recovery rejects user-selected artifacts without exact server provenance", () => {
@@ -447,7 +501,7 @@ test("recovery rejects user-selected artifacts without exact server provenance",
     (value) => { value.run.path = ".github/workflows/release.yml@main"; },
     (value) => { value.run.head_branch = "dev"; },
     (value) => { value.run.repository.full_name = "attacker/fault-affinity"; },
-    (value) => { value.run.conclusion = "cancelled"; },
+    (value) => { value.run.conclusion = "neutral"; },
     (value) => { value.run.event = "pull_request"; },
     (value) => { value.artifactsResponse.artifacts[0].expired = true; },
     (value) => { value.artifactsResponse.artifacts[0].workflow_run.head_sha = "8".repeat(40); },

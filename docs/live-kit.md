@@ -5,10 +5,29 @@ experiment without installing Git, Node, npm, or a compiler. It records
 observations under controlled CPU affinity; it does not, by itself, diagnose a
 processor, motherboard, or operating system fault.
 
-The first validation target is an official Ubuntu Desktop 26.04 LTS live
-session on an x86-64 computer. Public release remains disabled until that
-manual acceptance run passes. Ubuntu Desktop 24.04 LTS is a later compatibility
-target.
+The validated target is an official Ubuntu Desktop 26.04 LTS live session on
+an x86-64 computer. Ubuntu Desktop 24.04 LTS is a later compatibility target.
+If the Releases page does not yet show a stable kit, wait rather than using a
+development snapshot.
+
+## Make the Ubuntu USB on Windows
+
+Already have an Ubuntu 26.04.1 live USB? Skip to the safe preview below.
+
+Otherwise, use an empty USB drive of at least 8 GB. Creating the boot drive
+erases everything on it, so check the selected drive carefully and back up any
+files first.
+
+1. Download **Ubuntu Desktop 26.04.1 LTS for Intel or AMD 64-bit** from
+   [Ubuntu's official download page](https://ubuntu.com/download/desktop).
+2. Follow Ubuntu's
+   [Windows USB-creation guide](https://ubuntu.com/desktop/docs/en/latest/how-to/create-a-bootable-usb-stick/#on-windows)
+   to write the ISO to the USB. Copying the ISO file onto the drive is not
+   enough.
+3. Leave the USB connected and restart the computer. Choose the USB from the
+   boot menu (often **F12**, but it varies by manufacturer).
+4. Choose **Try Ubuntu**, not **Install Ubuntu**. This starts a temporary live
+   desktop without installing Ubuntu onto the computer.
 
 ## Start with a safe preview
 
@@ -27,8 +46,10 @@ create a result bundle.
 
 4. In `less`, use the arrow keys to look around and press **q** to exit. The
    bootstrap then verifies and extracts the kit without running the workload.
-5. Copy the **safe preview** command printed at the end. It uses `$HOME` only
-   for a read-only dry run. Do not add `--yes` there.
+5. If the machine exposes at least three schedulable CPUs, copy the **safe
+   preview** command printed at the end. It uses `$HOME` only for a read-only
+   dry run and selects CPUs that exist on this machine. Do not add `--yes`
+   there. On a smaller system, the bootstrap prints help instead.
 
 When the plan appears, the safe preview is complete. Continue below to choose
 persistent storage and understand the deliberate live-run step.
@@ -47,7 +68,14 @@ Until the separately versioned discovery flow is released, use this kit only
 when you have a reviewed target/load override or deliberately want the exact
 case-study comparison.
 
-## Before booting
+If CPUs 19 and 0–7 are unavailable, the bootstrap prints a compatible preview
+using CPUs that are schedulable on that machine. This is only so you can inspect
+the launcher and storage plan; it is labelled **not a target recommendation**.
+Do not copy its generated `--yes` command until you have deliberately chosen
+the target and load CPUs. The fixed case-study defaults inside the kit remain
+unchanged.
+
+## Before the confirmed run
 
 Prefer two USB drives:
 
@@ -104,19 +132,41 @@ To select a published release rather than the latest stable release:
 bash fault-affinity-run --version v0.1.0
 ```
 
-The bootstrap rejects root and non-x86-64 systems. It resolves `latest` once to
-one exact GitHub Release tag, downloads that tag's Linux archive and checksum,
-checks the SHA-256, validates the archive with Python's structured `tarfile`
-API plus a raw-header pass, and extracts into a new directory such as
-`fault-affinity-v0.1.0`. It rejects links, special files, traversal, duplicate
-paths, unexpected layout and permissions, extended headers, and excessive
-archive size or member count. It does not run the reference experiment.
+The bootstrap rejects root and non-x86-64 systems. In online mode, it resolves
+`latest` once to one exact GitHub Release tag and downloads that tag's Linux
+archive and checksum. In either mode, it checks the SHA-256, validates the
+archive with Python's structured `tarfile` API plus a raw-header pass, and
+extracts into a new directory such as `fault-affinity-v0.1.0`. It rejects
+links, special files, traversal, duplicate paths, unexpected layout and
+permissions, extended headers, and excessive archive size or member count. It
+does not run the reference experiment.
 
 HTTPS and the checksum published by the same GitHub project detect incomplete
 or mismatched downloads. They do not independently protect against compromise
-of that publisher. The release page also provides the archive for download on
-a stable computer when the live session has no network; copy the archive and
-checksum to removable media and verify both before following its `README.txt`.
+of that publisher.
+
+For a live session without network access, use a stable computer to download
+the exact release's Linux archive and its adjacent `.sha256` file. Also save
+the small
+[`fault-affinity-run` bootstrap](https://gadicc.github.io/fault-affinity/run),
+then copy all three files into one directory on removable media.
+
+In the live session, open that directory in Files so Ubuntu mounts the drive.
+Use its real path in place of `/media/ubuntu/KIT`, and replace `v0.1.0` with
+the tag shown on the release page:
+
+```sh
+cd "$HOME"
+less "/media/ubuntu/KIT/fault-affinity-run"
+bash "/media/ubuntu/KIT/fault-affinity-run" \
+  --version v0.1.0 \
+  --offline-dir "/media/ubuntu/KIT"
+```
+
+Press **q** to leave `less`. Offline mode requires the explicit tag, verifies
+the archive against the copied checksum, applies the same structured archive
+checks as the online path, and extracts into a new directory. It does not run
+the workload.
 
 If an interrupted extraction leaves a hidden directory named like
 `.fault-affinity-v0.1.0.partial-1234`, first confirm no bootstrap is running.
