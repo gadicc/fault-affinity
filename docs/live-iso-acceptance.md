@@ -39,6 +39,5 @@ and a dry run on ext4. It does not cover GRUB, the GNOME desktop, Firefox,
 physical USB boot behavior, networking, cloud upload instructions, or a
 confirmed live workload. Those boundaries remain separate manual checks.
 
-This evidence completes only `ubuntu2604LiveAcceptance`. Stable publication
-remains disabled until the repository protections are verified and every
-readiness gate is true.
+This evidence completes only `ubuntu2604LiveAcceptance`. It does not enable a
+release by itself; the checked-in readiness manifest requires every named gate.

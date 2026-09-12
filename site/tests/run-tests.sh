@@ -55,6 +55,70 @@ expect_failure() {
 make_fixture valid valid
 expect_success valid
 
+mkdir -p "$temporary/work/limited-preview"
+(
+  cd "$temporary/work/limited-preview"
+  FAULT_AFFINITY_TEST_RELEASE_DIR="$temporary/releases/valid" \
+    FAULT_AFFINITY_TEST_TAG=v0.1.0 \
+    FAULT_AFFINITY_TEST_ALLOWED_CPUS=4-7 \
+    bash "$bootstrap" --version v0.1.0 >output 2>&1
+  grep -q -- '--controller-cpu 6 --target-cpu 7 --load-cpus 4,5' output
+  grep -q 'compatibility preview is not a target recommendation' output
+  test ! -e WORKLOAD_RAN
+)
+passes=$((passes + 1))
+
+mkdir -p "$temporary/work/case-preview"
+(
+  cd "$temporary/work/case-preview"
+  FAULT_AFFINITY_TEST_RELEASE_DIR="$temporary/releases/valid" \
+    FAULT_AFFINITY_TEST_TAG=v0.1.0 \
+    FAULT_AFFINITY_TEST_ALLOWED_CPUS=0-8,19 \
+    bash "$bootstrap" --version v0.1.0 >output 2>&1
+  grep -q -- '--dry-run --controller-cpu 8 --target-cpu 19 --load-cpus 0,1,2,3,4,5,6,7' output
+  grep -q 'fixed CPU 19 / load 0-7 case-study layout' output
+  test ! -e WORKLOAD_RAN
+)
+passes=$((passes + 1))
+
+mkdir -p "$temporary/work/two-cpu-preview"
+(
+  cd "$temporary/work/two-cpu-preview"
+  FAULT_AFFINITY_TEST_RELEASE_DIR="$temporary/releases/valid" \
+    FAULT_AFFINITY_TEST_TAG=v0.1.0 \
+    FAULT_AFFINITY_TEST_ALLOWED_CPUS=4-5 \
+    bash "$bootstrap" --version v0.1.0 >output 2>&1
+  grep -q 'fewer than three schedulable CPUs' output
+  grep -q -- '/bin/run-reference.*--help' output
+  test ! -e WORKLOAD_RAN
+)
+passes=$((passes + 1))
+
+mkdir -p "$temporary/work/offline"
+(
+  cd "$temporary/work/offline"
+  if ! FAULT_AFFINITY_TEST_ALLOWED_CPUS=4-7 \
+    bash "$bootstrap" --version v0.1.0 \
+      --offline-dir "$temporary/releases/valid" >output 2>&1
+  then
+    cat output >&2
+    exit 1
+  fi
+  test -f fault-affinity-v0.1.0/RELEASE.json
+  grep -q -- '--results-root "$HOME" --dry-run' output
+  test ! -e WORKLOAD_RAN
+)
+passes=$((passes + 1))
+
+if bash "$bootstrap" --offline-dir "$temporary/releases/valid" \
+  >"$temporary/offline-without-version" 2>&1
+then
+  echo "not ok - offline bootstrap accepted no explicit version" >&2
+  exit 1
+fi
+grep -q -- '--offline-dir also requires --version' "$temporary/offline-without-version"
+passes=$((passes + 1))
+
 mkdir -p "$temporary/work/latest"
 (
   cd "$temporary/work/latest"
@@ -151,10 +215,54 @@ if bash "$temporary/arch-run" --version v0.1.0 >/dev/null 2>&1; then
 fi
 passes=$((passes + 1))
 
+mkdir -p "$temporary/releases/offline-symlink" "$temporary/work/offline-symlink"
+ln -s "$temporary/releases/valid/fault-affinity-live-linux-x64.tar.gz" \
+  "$temporary/releases/offline-symlink/fault-affinity-live-linux-x64.tar.gz"
+cp "$temporary/releases/valid/fault-affinity-live-linux-x64.tar.gz.sha256" \
+  "$temporary/releases/offline-symlink/fault-affinity-live-linux-x64.tar.gz.sha256"
+if (
+  cd "$temporary/work/offline-symlink"
+  bash "$bootstrap" --version v0.1.0 \
+    --offline-dir "$temporary/releases/offline-symlink" >output 2>&1
+); then
+  echo "not ok - offline bootstrap accepted a symlinked local archive" >&2
+  exit 1
+fi
+grep -q 'cannot copy local release input' \
+  "$temporary/work/offline-symlink/output"
+passes=$((passes + 1))
+
+mkdir -p "$temporary/releases/offline-fifo" "$temporary/work/offline-fifo"
+mkfifo "$temporary/releases/offline-fifo/fault-affinity-live-linux-x64.tar.gz"
+cp "$temporary/releases/valid/fault-affinity-live-linux-x64.tar.gz.sha256" \
+  "$temporary/releases/offline-fifo/fault-affinity-live-linux-x64.tar.gz.sha256"
+if (
+  cd "$temporary/work/offline-fifo"
+  timeout 5s bash "$bootstrap" --version v0.1.0 \
+    --offline-dir "$temporary/releases/offline-fifo" >output 2>&1
+); then
+  echo "not ok - offline bootstrap accepted a FIFO as a local archive" >&2
+  exit 1
+fi
+grep -q 'local release input is not a regular file' \
+  "$temporary/work/offline-fifo/output"
+passes=$((passes + 1))
+
 mkdir -p "$temporary/releases/oversized"
 truncate -s 536870913 "$temporary/releases/oversized/fault-affinity-live-linux-x64.tar.gz"
 printf '%064d  %s\n' 0 fault-affinity-live-linux-x64.tar.gz \
   >"$temporary/releases/oversized/fault-affinity-live-linux-x64.tar.gz.sha256"
 expect_failure oversized
+
+mkdir -p "$temporary/work/offline-oversized"
+if (
+  cd "$temporary/work/offline-oversized"
+  bash "$bootstrap" --version v0.1.0 \
+    --offline-dir "$temporary/releases/oversized" >/dev/null 2>&1
+); then
+  echo "not ok - offline bootstrap accepted an oversized local archive" >&2
+  exit 1
+fi
+passes=$((passes + 1))
 
 echo "ok - $passes bootstrap fixture cases"

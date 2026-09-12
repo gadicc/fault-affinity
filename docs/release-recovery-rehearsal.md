@@ -36,5 +36,5 @@ inspected and archived. Commit `42beb67` made that visibility interval a
 bounded retry while preserving exact size and digest checks; the successful
 rehearsal above used the merged fix.
 
-This evidence completes only `releaseRecoveryRehearsal`. Stable publication
-remains disabled until every other readiness gate is separately demonstrated.
+This evidence completes only `releaseRecoveryRehearsal`. It does not enable a
+release by itself; the checked-in readiness manifest requires every named gate.

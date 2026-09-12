@@ -19,8 +19,8 @@ Using Windows and looking for the simplest comparison? Start with the
 [Ubuntu live reference kit](docs/live-kit.md). It explains how to boot an
 official Ubuntu USB in **Try Ubuntu** mode, open Terminal, paste three safe
 preview commands, and save or upload the result. No Linux experience, Node,
-npm, or Git installation is required. The public download is still disabled
-until the documented live-session acceptance check passes.
+npm, or Git installation is required. Use only a stable kit shown on the
+Releases page; do not substitute a development snapshot.
 
 Already on Linux with Node and a repository checkout? Start with a dry run. It
 checks the machine and shows the complete plan without executing a workload or
@@ -187,8 +187,8 @@ start-from-scratch loaded screen when the kit contains a release that supports
 it. The bootstrap only downloads and verifies the kit; running the workload
 still requires a separate, explicit `--yes` confirmation.
 
-Public release publication is deliberately disabled until live-session,
-recovery, and repository-protection acceptance gates are complete. See
+Public release publication is guarded by checked-in acceptance gates, reviewed
+promotion to protected `main`, and manual `stable-release` approval. See
 [use the Ubuntu live reference kit](docs/live-kit.md) for the operator workflow
 and [the distribution and release plan](docs/distribution-and-release-plan.md)
 for the rollout and later native-Windows screening design.

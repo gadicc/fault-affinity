@@ -37,14 +37,15 @@ commit. Its manual recovery mode accepts only an existing matching tag and the
 exact retained artifact. Before the privileged recovery job starts, a read-only
 gate verifies the user-selected artifact's server-side ID belongs to a completed
 `main` run of this repository's exact stable-release workflow and source commit.
-It never overwrites a release asset.
+The run may have succeeded, failed, been cancelled, or timed out after retaining
+the exact artifact; every repository, workflow, commit, artifact, size, and
+expiry binding must still match. Recovery never overwrites a release asset.
 
-Publication is currently gated off by `release-readiness.json`. Enable it only
+Publication is controlled by `release-readiness.json`, which can enable it only
 when every named gate is reviewed and true: the result-preparation lease,
 Ubuntu 26.04 live acceptance, release-recovery rehearsal, and remote branch,
-tag, environment, and immutable-release protections. Snapshot builds, archive
-validation, and dry-run/help smoke checks remain available while publication
-is disabled.
+tag, environment, and immutable-release protections. The publish job still
+runs only from protected `main` and waits for `stable-release` approval.
 
 On `dev`, `package-snapshot.yml` turns the version-neutral stage into a
 commit-bound `0.1.0-dev.<short-commit>` acceptance candidate. It verifies the
@@ -162,19 +163,20 @@ the published endpoint first, searches bounded listing pages for a draft, and
 then refreshes that draft by release ID while uploads settle. See GitHub's
 [REST release documentation](https://docs.github.com/en/rest/releases/releases).
 
-Repository settings still required outside the tree:
+Repository settings verified on 12 September 2026:
 
 - keep `main` as the default branch and protect `main` and `dev`;
 - permit only reviewed `dev` promotion PRs and explicit hotfixes into `main`;
 - disallow force pushes and do not require linear history on `main`;
-- protect `v*` tags while allowing the stable-release workflow to create them;
-- enable immutable GitHub Releases;
-- configure the `stable-release` environment and its reviewer policy;
+- prevent existing `v*` tags from being moved or deleted while allowing the
+  stable-release workflow to create a new version name;
+- keep immutable GitHub Releases enabled;
+- require review through the `stable-release` environment;
 - make safe validation and promotion-policy checks required; and
-- keep Actions artifact retention at least as long as the documented 30-day
-  release-recovery window.
+- retain Actions artifacts and logs for 90 days, longer than the documented
+  30-day release-recovery window.
 
-The local `v0.0.0` baseline must be pushed and the above settings must be in
-place before enabling unattended publication. Rehearse the no-release, normal
-publish, tag-without-release, matching-draft, published-complete, and conflict
-states in a disposable repository first.
+The `v0.0.0` baseline is present remotely. The exact API readback, the
+intentional new-tag creation tradeoff, and the settings that should trigger a
+fresh review are recorded in
+[the remote release-protection evidence](../docs/remote-release-protections.md).

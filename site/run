@@ -22,14 +22,18 @@ done
 project_repository="gadicc/fault-affinity"
 asset_name="fault-affinity-live-linux-x64.tar.gz"
 requested_version=""
+offline_directory=""
 
 usage() {
   cat <<'EOF'
-Usage: bash fault-affinity-run [--version vX.Y.Z]
+Usage: bash fault-affinity-run [--version vX.Y.Z] [--offline-dir DIR]
 
 Without --version, install the latest stable GitHub Release. The release is
 resolved once to an exact tag. This command only downloads, verifies, and
 extracts the kit; it never starts the live workload.
+
+For an offline install, provide both the exact release tag and a directory
+containing the archive and its .sha256 file.
 EOF
 }
 
@@ -38,6 +42,11 @@ while [ "$#" -gt 0 ]; do
     --version)
       [ "$#" -ge 2 ] || { echo "error: --version requires a tag" >&2; exit 2; }
       requested_version=$2
+      shift 2
+      ;;
+    --offline-dir)
+      [ "$#" -ge 2 ] || { echo "error: --offline-dir requires a directory" >&2; exit 2; }
+      offline_directory=$2
       shift 2
       ;;
     --help|-h)
@@ -51,6 +60,17 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ -n "$offline_directory" ]; then
+  [ -n "$requested_version" ] || {
+    echo "error: --offline-dir also requires --version vX.Y.Z" >&2
+    exit 2
+  }
+  offline_directory=$(CDPATH= cd -- "$offline_directory" 2>/dev/null && pwd -P) || {
+    echo "error: --offline-dir is not an accessible directory" >&2
+    exit 2
+  }
+fi
 
 if [ "$(/usr/bin/id -u)" -eq 0 ]; then
   echo "error: do not run this bootstrap as root or with sudo" >&2
@@ -75,7 +95,8 @@ esac
   exit 1
 }
 
-/usr/bin/python3 -I - "$project_repository" "$asset_name" "$requested_version" "$(pwd -P)" <<'PY'
+/usr/bin/python3 -I - "$project_repository" "$asset_name" "$requested_version" \
+  "$(pwd -P)" "$offline_directory" <<'PY'
 import ctypes
 import gzip
 import hashlib
@@ -95,7 +116,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-REPOSITORY, ASSET_NAME, REQUESTED_TAG, DESTINATION_ROOT = sys.argv[1:]
+REPOSITORY, ASSET_NAME, REQUESTED_TAG, DESTINATION_ROOT, OFFLINE_DIRECTORY = sys.argv[1:]
 API_ROOT = f"https://api.github.com/repos/{REPOSITORY}"
 RELEASE_ROOT = f"https://github.com/{REPOSITORY}/releases/download"
 ALLOWED_REDIRECT_HOSTS = {
@@ -191,18 +212,36 @@ def fetch(url, destination, limit):
         fail(f"download failed for {url}: {error}")
 
 
-def copy_test_fixture(name, destination, limit):
-    source = Path(os.environ["FAULT_AFFINITY_TEST_RELEASE_DIR"]) / name
-    if not source.is_file() or source.is_symlink():
-        fail(f"test fixture is not a regular file: {source}")
-    if source.stat().st_size > limit:
-        fail(f"test fixture exceeds {limit} bytes: {source}")
-    with open(source, "rb") as input_file, open(destination, "xb") as output:
-        shutil.copyfileobj(input_file, output, 1024 * 1024)
+def copy_local_release(directory, name, destination, limit):
+    source = Path(directory) / name
+    descriptor = None
+    try:
+        descriptor = os.open(
+            source,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        information = os.fstat(descriptor)
+        if not stat.S_ISREG(information.st_mode):
+            fail(f"local release input is not a regular file: {source}")
+        if information.st_size > limit:
+            fail(f"local release input exceeds {limit} bytes: {source}")
+        with os.fdopen(descriptor, "rb") as input_file, open(destination, "xb") as output:
+            descriptor = None
+            written = 0
+            while chunk := input_file.read(1024 * 1024):
+                written += len(chunk)
+                if written > limit:
+                    fail(f"local release input exceeds {limit} bytes while copying: {source}")
+                output.write(chunk)
+    except OSError as error:
+        fail(f"cannot copy local release input {source}: {error}")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 test_mode = TEST_FIXTURE_MODE
-if test_mode and not os.environ.get("FAULT_AFFINITY_TEST_RELEASE_DIR"):
+if test_mode and not OFFLINE_DIRECTORY and not os.environ.get("FAULT_AFFINITY_TEST_RELEASE_DIR"):
     fail("fixture mode requires a test release directory")
 
 with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary:
@@ -228,9 +267,13 @@ with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary
     archive_path = temporary_path / ASSET_NAME
     checksum_name = f"{ASSET_NAME}.sha256"
     checksum_path = temporary_path / checksum_name
-    if test_mode:
-        copy_test_fixture(ASSET_NAME, archive_path, MAX_ARCHIVE_BYTES)
-        copy_test_fixture(checksum_name, checksum_path, MAX_CHECKSUM_BYTES)
+    if OFFLINE_DIRECTORY:
+        copy_local_release(OFFLINE_DIRECTORY, ASSET_NAME, archive_path, MAX_ARCHIVE_BYTES)
+        copy_local_release(OFFLINE_DIRECTORY, checksum_name, checksum_path, MAX_CHECKSUM_BYTES)
+    elif test_mode:
+        fixture_directory = os.environ["FAULT_AFFINITY_TEST_RELEASE_DIR"]
+        copy_local_release(fixture_directory, ASSET_NAME, archive_path, MAX_ARCHIVE_BYTES)
+        copy_local_release(fixture_directory, checksum_name, checksum_path, MAX_CHECKSUM_BYTES)
     else:
         quoted_tag = urllib.parse.quote(tag, safe="")
         exact_root = f"{RELEASE_ROOT}/{quoted_tag}"
@@ -511,7 +554,69 @@ for role, runtime_version, runtime_hash in runtime_lines:
 print(f"  directory: {destination}")
 print()
 preview = shlex.quote(str(destination / "bin" / "run-reference"))
-print("No workload was started. For a safe preview using temporary live-session storage:")
-print(f'  {preview} --results-root "$HOME"')
-print("Do not add --yes yet. Read README.txt and choose persistent Unix storage first.")
+
+
+def parse_system_cpu_set(text):
+    cpus = set()
+    for field in text.split(","):
+        match = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", field)
+        if not match:
+            raise ValueError("invalid CPU set")
+        first = int(match.group(1))
+        last = first if match.group(2) is None else int(match.group(2))
+        if last < first or last - first > 65536:
+            raise ValueError("invalid CPU range")
+        cpus.update(range(first, last + 1))
+    return cpus
+
+
+def schedulable_preview_selection():
+    try:
+        fixture_cpus = test_mode and os.environ.get("FAULT_AFFINITY_TEST_ALLOWED_CPUS")
+        if fixture_cpus:
+            allowed = parse_system_cpu_set(os.environ["FAULT_AFFINITY_TEST_ALLOWED_CPUS"])
+            online = allowed
+        else:
+            allowed = set(os.sched_getaffinity(0))
+            try:
+                online = parse_system_cpu_set(
+                    Path("/sys/devices/system/cpu/online").read_text(encoding="ascii").strip()
+                )
+            except (OSError, UnicodeError, ValueError):
+                online = allowed
+        usable = sorted(allowed & online)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+    case_load = list(range(8))
+    case_controllers = [cpu for cpu in usable if cpu != 19 and cpu not in case_load]
+    if 19 in usable and all(cpu in usable for cpu in case_load) and case_controllers:
+        return "case-study", 19, case_controllers[0], case_load
+    if len(usable) < 3:
+        return None
+    return "compatibility", usable[-1], usable[-2], usable[:min(8, len(usable) - 2)]
+
+
+selection = schedulable_preview_selection()
+print("No workload was started.")
+if selection is None:
+    print(
+        "This machine exposes fewer than three schedulable CPUs, "
+        "so no A/B/A preview can be planned."
+    )
+    print(f"  {preview} --help")
+else:
+    preview_kind, target_cpu, controller_cpu, load_cpus = selection
+    load_text = ",".join(str(cpu) for cpu in load_cpus)
+    print("For a safe preview using temporary live-session storage:")
+    print(
+        f'  {preview} --results-root "$HOME" --dry-run --controller-cpu {controller_cpu} '
+        f"--target-cpu {target_cpu} --load-cpus {load_text}"
+    )
+    if preview_kind == "case-study":
+        print("This preview uses the fixed CPU 19 / load 0-7 case-study layout.")
+    else:
+        print("This compatibility preview is not a target recommendation.")
+        print("Do not run its --yes command until you have chosen and reviewed the CPUs to test.")
+print("Read README.txt and choose persistent Unix storage before any confirmed run.")
 PY

@@ -385,14 +385,11 @@ release-time commit back to protected `main`; tags and GitHub releases are the
 version authority. Disable GitHub issue/PR success and failure comments,
 labels, and closing behavior so the publisher needs only contents authority.
 
-There are currently no release tags, while `package.json` and the lockfile say
-`1.0.0`. An unseeded semantic-release run would examine the whole history and
-normally start at `v1.0.0`. For a public `v0.1.0`, change the private package's
-non-authoritative development version deliberately, place a reviewed
-`v0.0.0` baseline tag on the stable pre-distribution commit without publishing
-it as a user release, and only then enable the main release workflow. The first
-`feat` promotion can then create `v0.1.0`. Rehearse this history in a temporary
-repository and document that a breaking-change commit can advance `0.x` to
+The private package now uses the non-authoritative `0.0.0-development` version,
+and the reviewed `v0.0.0` baseline tag exists on the stable pre-distribution
+commit without a user release. This keeps semantic-release from examining the
+older history or starting at `v1.0.0`. The first `feat` promotion can create
+`v0.1.0`. Document that a breaking-change commit can advance `0.x` to
 `1.0.0`.
 
 ## Separate CI responsibilities
