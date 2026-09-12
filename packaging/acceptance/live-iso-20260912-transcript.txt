@@ -1,0 +1,31 @@
+Privacy-minimized acceptance excerpt from serial.log
+
+ACCEPTANCE.txt: OK
+acceptance-vm.sh: OK
+safe-extract.py: OK
+fault-affinity-live-linux-x64.tar.gz: OK
+fault-affinity-sbom.spdx.json: OK
+v24.21.0
+v25.2.1
+
+Fault Affinity reference dry run
+
+Profile: load-aba-reference v1 (A1 / loaded B / A2)
+Controller CPU: 2
+Target CPU: 3
+Load CPUs: 0, 1
+Attempts: 1 per leg (3 total)
+
+Details:
+  Release: v0.1.0-dev.bccc35f2b403 from bccc35f2b40346b4eefa755eb5c4f0f2242714c8
+  Controller runtime: v24.21.0 (SHA-256 7fde7b8afa19…, verified)
+  Target runtime: v25.2.1 (SHA-256 ff2d367cbba8…, verified)
+  Attempt deadline: 120 seconds
+  Loaded-window safety bound: 153000 ms
+  Storage: ext4, 223188992 bytes available
+
+Nothing was executed.
+FAULT_AFFINITY_VM_RELEASE=0.1.0-dev.bccc35f2b403
+FAULT_AFFINITY_VM_COMMIT=bccc35f2b40346b4eefa755eb5c4f0f2242714c8
+FAULT_AFFINITY_VM_ACCEPTANCE_OK
+FAULT_AFFINITY_VM_STATUS=0
