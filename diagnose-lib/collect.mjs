@@ -231,7 +231,7 @@ function readStoredRunMetadata(outDir) {
   };
 }
 
-export function resolveExpectedCpu(runMetaState, individualStatus, worstCpu) {
+export function resolveExpectedCpu(runMetaState, individualStatus, worstCpu, pinnedConcurrent = null) {
   if (runMetaState.status !== "complete" || runMetaState.cpuTargetConfig?.status !== "complete") {
     return {
       status: "invalid",
@@ -244,17 +244,28 @@ export function resolveExpectedCpu(runMetaState, individualStatus, worstCpu) {
   if (target.policy === "fixed") {
     return { status: "resolved", policy: "fixed", cpu: target.cpu, reason: null };
   }
-  if (individualStatus.status === "skipped") {
-    return { status: "none", policy: "auto", cpu: null, reason: "automatic CPU selection has no target because individual isolation was skipped" };
-  }
+  const cpu = Number.isSafeInteger(worstCpu) && worstCpu >= 0 && worstCpu <= 65535 ? worstCpu : null;
   if (individualStatus.status !== "complete") {
+    if (individualStatus.status === "skipped") {
+      return { status: "none", policy: "auto", cpu: null, reason: "automatic CPU selection has no target because individual isolation was skipped" };
+    }
     return { status: "unavailable", policy: "auto", cpu: null, reason: "automatic CPU selection requires complete provenance-valid individual evidence" };
   }
-  const cpu = Number.isSafeInteger(worstCpu) && worstCpu >= 0 && worstCpu <= 65535 ? worstCpu : null;
-  if (cpu === null) {
-    return { status: "none", policy: "auto", cpu: null, reason: "automatic CPU selection found no failing individual CPU" };
+  if (cpu !== null) {
+    return {
+      status: "resolved", policy: "auto", cpu, reason: null,
+      source: "isolated", context: "isolated",
+    };
   }
-  return { status: "resolved", policy: "auto", cpu, reason: null };
+  const pinned = selectWorstPinnedConcurrentCpu(pinnedConcurrent);
+  if (pinned !== null) {
+    return {
+      status: "resolved", policy: "auto", cpu: pinned.cpu, reason: null,
+      source: "pinned-concurrent", context: pinned.context,
+      activeCpuCount: pinned.activeCpuCount,
+    };
+  }
+  return { status: "none", policy: "auto", cpu: null, reason: "automatic CPU selection found no failing isolated CPU or eligible pinned-concurrent CPU" };
 }
 
 function readTsv(file) {
@@ -560,6 +571,49 @@ export function selectWorstIndividualCpu(records) {
       if (leftProduct !== rightProduct) return leftProduct > rightProduct ? -1 : 1;
       return right.sigsegv - left.sigsegv || left.cpu - right.cpu;
     })[0]?.cpu ?? null;
+}
+
+// A CPU can occur in more than one concurrent topology context. Keep one
+// representative stratum per CPU before ranking: the smallest active set is
+// the most specific exposure, and the context id makes equal-size choices
+// deterministic. Contexts are never pooled.
+export function selectWorstPinnedConcurrentCpu(pinnedConcurrent) {
+  const status = pinnedConcurrent?.status;
+  const summary = pinnedConcurrent?.summary;
+  if (status?.status !== "complete" || status?.authoritative !== true ||
+      summary?.authoritative !== true || !Array.isArray(summary.groups) ||
+      !Array.isArray(summary.perCpu)) return null;
+
+  const activeCpuCounts = new Map();
+  for (const group of summary.groups) {
+    const cpus = parsePinnedConcurrentCpuList(group?.cpus);
+    if (typeof group?.group !== "string" || cpus === null || cpus.length === 0) return null;
+    activeCpuCounts.set(group.group, cpus.length);
+  }
+
+  const perCpu = new Map();
+  for (const record of summary.perCpu) {
+    const context = record?.context ?? record?.group;
+    const activeCpuCount = activeCpuCounts.get(context);
+    if (!Number.isSafeInteger(record?.cpu) || record.cpu < 0 || record.cpu > 65535 ||
+        !Number.isSafeInteger(record?.sigsegv) || record.sigsegv < 0 ||
+        !Number.isSafeInteger(record?.runs) || record.runs < 0 ||
+        record.sigsegv > record.runs || !Number.isSafeInteger(activeCpuCount)) continue;
+    const candidate = { cpu: record.cpu, context, activeCpuCount, sigsegv: record.sigsegv, runs: record.runs };
+    const previous = perCpu.get(candidate.cpu);
+    if (previous === undefined || candidate.activeCpuCount < previous.activeCpuCount ||
+        (candidate.activeCpuCount === previous.activeCpuCount && candidate.context < previous.context)) {
+      perCpu.set(candidate.cpu, candidate);
+    }
+  }
+
+  return [...perCpu.values()].filter((candidate) =>
+    candidate.sigsegv > 0 && candidate.runs > 0).sort((left, right) => {
+    const leftProduct = BigInt(left.sigsegv) * BigInt(right.runs);
+    const rightProduct = BigInt(right.sigsegv) * BigInt(left.runs);
+    if (leftProduct !== rightProduct) return leftProduct > rightProduct ? -1 : 1;
+    return right.sigsegv - left.sigsegv || right.runs - left.runs || left.cpu - right.cpu;
+  })[0] ?? null;
 }
 
 export { assessIndividualEnvelopeRows as assessIndividual };
@@ -2012,13 +2066,16 @@ export function collect(outDir, options = {}) {
   if (individualStatus.status === "complete") {
     results.worstCpu = selectWorstIndividualCpu(results.individual ?? []);
   } else results.worstCpu = null;
-  const expectedCpuState = resolveExpectedCpu(runMetaState, individualStatus, results.worstCpu);
-  results.cpuSelectionStatus = expectedCpuState;
 
   // --- exact-CPU pinned-concurrent topology contexts ---
   const pinnedConcurrent = collectPinnedConcurrent(outDir, runMetaState, groupsAssessment);
   results.pinnedConcurrentStatus = pinnedConcurrent.status;
   if (pinnedConcurrent.summary !== null) results.pinnedConcurrent = pinnedConcurrent.summary;
+
+  const expectedCpuState = resolveExpectedCpu(
+    runMetaState, individualStatus, results.worstCpu, pinnedConcurrent,
+  );
+  results.cpuSelectionStatus = expectedCpuState;
 
   // --- frequency A/B/A ---
   const frequencyEvidence = inspectFrequencyEvidence(outDir, { expectedCpuState });

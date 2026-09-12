@@ -20,6 +20,7 @@ import {
   reconcileIndividualWithGroups,
   resolveExpectedCpu,
   selectWorstIndividualCpu,
+  selectWorstPinnedConcurrentCpu,
   summarizeFreqSamples,
 } from "../collect.mjs";
 import {
@@ -409,12 +410,145 @@ test("resolveExpectedCpu distinguishes fixed, automatic, absent, and invalid tar
   };
   assert.deepEqual(resolveExpectedCpu(automatic, { status: "complete" }, 7), {
     status: "resolved", policy: "auto", cpu: 7, reason: null,
+    source: "isolated", context: "isolated",
   });
   assert.equal(resolveExpectedCpu(automatic, { status: "complete" }, null).status, "none");
   assert.equal(resolveExpectedCpu(automatic, { status: "skipped" }, null).status, "none");
   assert.equal(resolveExpectedCpu(automatic, { status: "incomplete" }, 7).status, "unavailable");
   assert.equal(resolveExpectedCpu(automatic, { status: "invalid" }, 7).status, "unavailable");
   assert.equal(resolveExpectedCpu({ ...automatic, status: "invalid" }, { status: "complete" }, 7).status, "invalid");
+});
+
+test("automatic CPU selection falls back to the finest authoritative pinned-concurrent stratum", () => {
+  const pinned = {
+    status: { status: "complete", authoritative: true },
+    summary: {
+      authoritative: true,
+      groups: [
+        { group: "wide", cpus: "19-22" },
+        { group: "narrow-z", cpus: "19-20" },
+        { group: "narrow-a", cpus: "19-20" },
+        { group: "other", cpus: "21-22" },
+      ],
+      perCpu: [
+        // CPU 19's wide result is deliberately worse, but it must not be
+        // selected over its finer contexts. Equal-size contexts use the
+        // stable context id, so narrow-a is retained over narrow-z.
+        { context: "wide", cpu: 19, runs: 4, sigsegv: 4 },
+        { context: "narrow-z", cpu: 19, runs: 10, sigsegv: 2 },
+        { context: "narrow-a", cpu: 19, runs: 10, sigsegv: 1 },
+        { context: "other", cpu: 21, runs: 9, sigsegv: 1 },
+      ],
+    },
+  };
+  assert.deepEqual(selectWorstPinnedConcurrentCpu(pinned), {
+    cpu: 21, context: "other", activeCpuCount: 2, sigsegv: 1, runs: 9,
+  });
+
+  const automatic = {
+    status: "complete",
+    cpuTargetConfig: { status: "complete", policy: "auto", cpu: null },
+  };
+  assert.deepEqual(resolveExpectedCpu(automatic, { status: "complete" }, null, pinned), {
+    status: "resolved", policy: "auto", cpu: 21, reason: null,
+    source: "pinned-concurrent", context: "other", activeCpuCount: 2,
+  });
+  assert.equal(
+    resolveExpectedCpu(automatic, { status: "incomplete" }, null, pinned).status,
+    "unavailable",
+  );
+});
+
+test("pinned fallback keeps a clean finest context instead of borrowing a wider failure", () => {
+  const pinned = {
+    status: { status: "complete", authoritative: true },
+    summary: {
+      authoritative: true,
+      groups: [
+        { group: "wide", cpus: "19-22" },
+        { group: "fine", cpus: "19-20" },
+        { group: "other", cpus: "21-22" },
+      ],
+      perCpu: [
+        { context: "wide", cpu: 19, runs: 4, sigsegv: 4 },
+        { context: "fine", cpu: 19, runs: 4, sigsegv: 0 },
+        { context: "other", cpu: 21, runs: 4, sigsegv: 1 },
+      ],
+    },
+  };
+  assert.deepEqual(selectWorstPinnedConcurrentCpu(pinned), {
+    cpu: 21, context: "other", activeCpuCount: 2, sigsegv: 1, runs: 4,
+  });
+  assert.equal(selectWorstPinnedConcurrentCpu({
+    ...pinned,
+    summary: { ...pinned.summary, perCpu: pinned.summary.perCpu.slice(0, 2) },
+  }), null);
+});
+
+test("pinned fallback is unavailable unless isolated evidence is complete and clean", () => {
+  const pinned = {
+    status: { status: "complete", authoritative: true },
+    summary: {
+      authoritative: true,
+      groups: [{ group: "ctx", cpus: "19-20" }],
+      perCpu: [{ context: "ctx", cpu: 19, runs: 4, sigsegv: 1 }],
+    },
+  };
+  const automatic = {
+    status: "complete",
+    cpuTargetConfig: { status: "complete", policy: "auto", cpu: null },
+  };
+  for (const status of ["invalid", "incomplete", "skipped"]) {
+    const resolved = resolveExpectedCpu(automatic, { status }, null, pinned);
+    assert.equal(resolved.status, status === "skipped" ? "none" : "unavailable");
+    assert.notEqual(resolved.source, "pinned-concurrent");
+  }
+  assert.deepEqual(
+    resolveExpectedCpu(automatic, { status: "complete" }, null, pinned),
+    {
+      status: "resolved", policy: "auto", cpu: 19, reason: null,
+      source: "pinned-concurrent", context: "ctx", activeCpuCount: 2,
+    },
+  );
+});
+
+test("pinned-concurrent fallback ranks exact rates, target count, runs, then CPU", () => {
+  const pinned = {
+    status: { status: "complete", authoritative: true },
+    summary: {
+      authoritative: true,
+      groups: [{ group: "ctx", cpus: "1-4" }],
+      perCpu: [
+        { context: "ctx", cpu: 4, runs: 2, sigsegv: 1 },
+        { context: "ctx", cpu: 3, runs: 4, sigsegv: 2 },
+        { context: "ctx", cpu: 2, runs: 8, sigsegv: 4 },
+        { context: "ctx", cpu: 1, runs: 8, sigsegv: 4 },
+      ],
+    },
+  };
+  // Every candidate has rate 1/2. Target count, then resolved runs, then
+  // lower CPU make the outcome deterministic without floating-point math.
+  assert.deepEqual(selectWorstPinnedConcurrentCpu(pinned), {
+    cpu: 1, context: "ctx", activeCpuCount: 4, sigsegv: 4, runs: 8,
+  });
+  assert.equal(selectWorstPinnedConcurrentCpu({
+    ...pinned,
+    status: { status: "complete", authoritative: false },
+  }), null);
+
+  const maximum = Number.MAX_SAFE_INTEGER;
+  const half = Math.floor(maximum / 2);
+  assert.equal(selectWorstPinnedConcurrentCpu({
+    status: { status: "complete", authoritative: true },
+    summary: {
+      authoritative: true,
+      groups: [{ group: "exact", cpus: "3-4" }],
+      perCpu: [
+        { context: "exact", cpu: 3, runs: maximum, sigsegv: half },
+        { context: "exact", cpu: 4, runs: maximum - 4, sigsegv: half - 1 },
+      ],
+    },
+  })?.cpu, 4);
 });
 
 test("collector binds non-skipped GDB evidence while strict skips remain policy-independent", () => {

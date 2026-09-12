@@ -303,6 +303,24 @@ test("a validated GDB-only signature names its exact logical CPU", () => {
   assert.match(report, /GDB: confirmed .* on logical CPU 19\./);
 });
 
+test("clean isolated evidence and failing authoritative pinned contexts are stated as distinct strata", () => {
+  const report = renderReport(base({
+    individual: [
+      { cpu: 19, runs: 200, failures: 0, sigsegv: 0, invalidRuns: [], failedRuns: [] },
+      { cpu: 21, runs: 200, failures: 0, sigsegv: 0, invalidRuns: [], failedRuns: [] },
+    ],
+    worstCpu: null,
+    cpuSelectionStatus: {
+      status: "resolved", policy: "auto", cpu: 19, reason: null,
+      source: "pinned-concurrent", context: "ecluster-64", activeCpuCount: 1,
+    },
+  }));
+  assert.match(report, /isolated exact-CPU phase observed no SIGSEGV, while the separate authoritative pinned-concurrent contexts did observe SIGSEGV/);
+  assert.match(report, /These results are not contradictory: isolated and concurrent contexts are different exposure strata/);
+  assert.match(report, /Automatic follow-up CPU selection: CPU 19 from the authoritative pinned-concurrent context ecluster-64 \(1-CPU active set\)/);
+  assert.match(report, /Exact-CPU pinned-concurrent exposure.*SIGSEGV on/);
+});
+
 test("changed or incomplete no_turbo evidence cannot authorize the turbo claim", () => {
   const report = renderReport(base({
     noTurboCondition: {

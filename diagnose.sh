@@ -181,7 +181,8 @@ Options:
   --group-waves N       waves per CPU group (overrides mode default)
   --gdb-max-runs N      max gdb attempts (overrides mode default)
   --cpu N|auto          use a fixed CPU for GDB/frequency evidence, or select
-                        the worst failing CPU automatically (default)
+                        isolated failures first, then authoritative
+                        pinned-concurrent failures (default)
   --dry-run             print the resolved plan and exit without running
   --yes                 accept the safety warning (required non-interactively)
   -h, --help            this help
@@ -1405,6 +1406,20 @@ validate_completed_phase_overrides() {
       "changing CPU selection policy from $stored to $CPU_TARGET"
   fi
   validate_cpu_target_for_completed_phases "$CPU_TARGET"
+}
+
+# On resume, an automatic CPU policy must be resolved before the immutable
+# completed-phase gate examines retained CPU-bound manual evidence. A validated
+# GDB skip has no CPU binding, and redo-owned evidence will be replaced.
+resume_requires_auto_cpu_provenance() {
+  local gdb_cpu
+  [[ -n "$RESUME_DIR" && "$CPU_TARGET" == auto ]] || return 1
+  if phase_is_done frequency && ! phase_redo_is_authorized frequency; then
+    return 0
+  fi
+  phase_is_done gdb && ! phase_redo_is_authorized gdb || return 1
+  gdb_cpu="$(gdb_completed_envelope_cpu 2> /dev/null)" || return 1
+  [[ "$gdb_cpu" =~ ^(0|[1-9][0-9]*)$ ]]
 }
 
 RUN_LOG_FD=""
@@ -4967,20 +4982,36 @@ phase_pinned_concurrent() {
 }
 
 # ------------------------------------------------------------------
-# Worst CPU from a fully validated individual phase (highest SIGSEGV rate,
-# ties: more SIGSEGVs, then lower CPU id). When this shell already derived the
-# expected targets, the envelope must also bind that exact groups generation;
-# the startup CPU-policy path runs before any derivation and is caught later
-# by the phase-4 gate, so it intentionally skips that comparison.
+# Worst CPU from fully validated exact-pinning evidence. Isolated evidence has
+# priority. If it is complete but clean, schema-2 runs may fall back to the
+# finest authoritative pinned-concurrent context per CPU; overlapping contexts
+# are never pooled. Callers must first derive the expected target policy from
+# the validated groups envelope, so every selected CPU is provenance-bound to
+# that exact groups generation and plan digest.
 worst_cpu() {
-  local expected_version=4
+  local expected_version=4 pinned_generation
   [[ "$RUN_SCHEMA_VERSION" == 2 ]] && expected_version=6
   individual_evidence_read || return 0
   [[ "$INDIVIDUAL_META_VERSION" == "$expected_version" &&
     "$INDIVIDUAL_EVIDENCE_STATUS" == complete ]] || return 0
-  [[ -n "$INDIVIDUAL_GROUP_GENERATION" &&
-    "$INDIVIDUAL_META_GROUP_GENERATION" != "$INDIVIDUAL_GROUP_GENERATION" ]] && return 0
-  printf '%s\n' "$INDIVIDUAL_EVIDENCE_WORST_CPU"
+  [[ "$INDIVIDUAL_GROUP_GENERATION" =~ ^[a-f0-9]{32}$ &&
+    "$INDIVIDUAL_GROUP_PLAN_DIGEST" =~ ^[a-f0-9]{64}$ &&
+    "$INDIVIDUAL_META_GROUP_GENERATION" == "$INDIVIDUAL_GROUP_GENERATION" &&
+    "$INDIVIDUAL_META_GROUP_PLAN_DIGEST" == "$INDIVIDUAL_GROUP_PLAN_DIGEST" ]] || return 0
+  if [[ -n "$INDIVIDUAL_EVIDENCE_WORST_CPU" ]]; then
+    printf '%s\n' "$INDIVIDUAL_EVIDENCE_WORST_CPU"
+    return 0
+  fi
+  [[ "$RUN_SCHEMA_VERSION" == 2 &&
+    "$INDIVIDUAL_GROUP_GENERATION" =~ ^[a-f0-9]{32}$ &&
+    "$INDIVIDUAL_GROUP_PLAN_DIGEST" =~ ^[a-f0-9]{64}$ ]] || return 0
+  pinned_concurrent_evidence_is_complete || return 0
+  pinned_generation="$(metadata_exact_value \
+    "$OUT_DIR/results/pinned-concurrent.meta" GENERATION 2> /dev/null)" || return 0
+  node "$LIB/pinned-concurrent-evidence.mjs" select-cpu "$OUT_DIR" \
+    "$pinned_generation" "$INDIVIDUAL_GROUP_GENERATION" \
+    "$INDIVIDUAL_GROUP_PLAN_DIGEST" "$PINNED_CONCURRENT_ROUNDS" \
+    "$PROTOCOL_SEED" 2> /dev/null || return 0
 }
 
 # ------------------------------------------------------------------
@@ -6223,7 +6254,7 @@ print_plan() {
   local concurrent_waves=0 concurrent_child_runs=0 concurrent_peak=0
   ncpus_online="$(diag_cpulist_count "$ONLINE_CPUS")"
   if [[ "$CPU_TARGET" == auto ]]; then
-    cpu_policy="auto (worst failing CPU from individual results)"
+    cpu_policy="auto (isolated failures first; authoritative pinned-concurrent fallback)"
   else
     cpu_policy="fixed CPU $CPU_TARGET"
   fi
@@ -6400,6 +6431,16 @@ main() {
     else
       diag_die "configured CPU target $WORST_CPU_OVERRIDE is not in the usable CPU set ($ONLINE_CPUS); resume using --cpu auto"
     fi
+  fi
+  # Retained manual frequency and non-skipped GDB results carry a CPU
+  # binding. Derive the individual target provenance before checking either
+  # binding, even on legacy resumes; otherwise worst_cpu could accept a stale
+  # individual envelope before phase 4 has a chance to reject it. This also
+  # lets a clean completed isolated phase authorize the schema-2 pinned
+  # fallback while the completed-phase override gate is still running.
+  if resume_requires_auto_cpu_provenance; then
+    compute_individual_targets || [[ "$INDIVIDUAL_TARGET_POLICY" == quick-skip ]] ||
+      diag_die "cannot derive automatic CPU provenance from the validated groups evidence"
   fi
   validate_completed_phase_overrides
 

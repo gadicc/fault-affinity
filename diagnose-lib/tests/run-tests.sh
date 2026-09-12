@@ -6098,6 +6098,8 @@ touch "$CPU_EVIDENCE_RB/state/phase-individual.done"
   RUN_SCHEMA_VERSION=1
   RESUME_DIR="$CPU_EVIDENCE_RB" OUT_DIR="$CPU_EVIDENCE_RB" STATE_DIR="$CPU_EVIDENCE_RB/state"
   META_FILE="$CPU_EVIDENCE_RB/results/meta.env" CPU_TARGET=auto
+  INDIVIDUAL_GROUP_PLAN_DIGEST="$(printf '0%.0s' {1..64})"
+  INDIVIDUAL_GROUP_GENERATION="$GROUPS_TEST_GENERATION"
   validate_completed_phase_overrides
 )
 check_eq "auto CPU policy accepts matching completed GDB evidence" "0" "$?"
@@ -6689,6 +6691,8 @@ worst_cpu_out="$(
   source "$REPO_ROOT/diagnose.sh"
   RUN_SCHEMA_VERSION=1
   OUT_DIR="$WORST_CPU_DIR"
+  INDIVIDUAL_GROUP_PLAN_DIGEST="$(printf '0%.0s' {1..64})"
+  INDIVIDUAL_GROUP_GENERATION="$GROUPS_TEST_GENERATION"
   worst_cpu
 )"
 check_eq "worst_cpu rejects an invalid completed individual phase" "" "$worst_cpu_out"
@@ -6700,6 +6704,8 @@ worst_cpu_out="$(
   source "$REPO_ROOT/diagnose.sh"
   RUN_SCHEMA_VERSION=1
   OUT_DIR="$WORST_CPU_DIR"
+  INDIVIDUAL_GROUP_PLAN_DIGEST="$(printf '0%.0s' {1..64})"
+  INDIVIDUAL_GROUP_GENERATION="$GROUPS_TEST_GENERATION"
   worst_cpu
 )"
 check_eq "worst_cpu ranks only a fully validated individual phase" "4" "$worst_cpu_out"
@@ -7018,7 +7024,7 @@ auto_cpu_plan="$($REPO_ROOT/diagnose.sh --resume "$CPU_POLICY_RB" --cpu auto --d
 check_eq "resume keeps a stored fixed CPU policy" "1" \
   "$([[ "$stored_cpu_plan" == *"CPU selection      fixed CPU $TEST_ONLINE_CPU"* ]] && echo 1 || echo 0)"
 check_eq "--cpu auto clears a stored fixed CPU policy" "1" \
-  "$([[ "$auto_cpu_plan" == *"CPU selection      auto (worst failing CPU from individual results)"* ]] && echo 1 || echo 0)"
+  "$([[ "$auto_cpu_plan" == *"CPU selection      auto (isolated failures first; authoritative pinned-concurrent fallback)"* ]] && echo 1 || echo 0)"
 "$REPO_ROOT/diagnose.sh" --cpu auto --cpu "$TEST_ONLINE_CPU" --dry-run --yes > /dev/null 2>&1
 repeated_cpu_rc=$?
 check_eq "repeated --cpu flags are rejected" "1" "$([[ $repeated_cpu_rc -ne 0 ]] && echo 1 || echo 0)"
@@ -7028,7 +7034,7 @@ mkdir -p "$LEGACY_CPU_RB"/{results,state}
 sed '/^CPU_TARGET=/d' "$CPU_POLICY_RB/results/meta.env" > "$LEGACY_CPU_RB/results/meta.env"
 legacy_cpu_plan="$($REPO_ROOT/diagnose.sh --resume "$LEGACY_CPU_RB" --dry-run --yes 2>&1)"
 check_eq "legacy metadata without CPU_TARGET defaults to auto" "1" \
-  "$([[ "$legacy_cpu_plan" == *"CPU selection      auto (worst failing CPU from individual results)"* ]] && echo 1 || echo 0)"
+  "$([[ "$legacy_cpu_plan" == *"CPU selection      auto (isolated failures first; authoritative pinned-concurrent fallback)"* ]] && echo 1 || echo 0)"
 for malformed_cpu_meta in duplicate malformed unterminated; do
   BAD_CPU_RB="$TMP/bad-cpu-$malformed_cpu_meta"
   mkdir -p "$BAD_CPU_RB"/{results,state}
@@ -8820,8 +8826,18 @@ mkdir -p "$EARLY_REVOKE_ROOT"
 cp -a "$B" "$EARLY_REVOKE_BUNDLE"
 mkdir "$EARLY_REVOKE_BUNDLE/.results.json.pending"
 early_revoke_before="$(sha256sum "$EARLY_REVOKE_BUNDLE/results/meta.env" "$EARLY_REVOKE_BUNDLE/run.log")"
-timeout --signal=TERM --kill-after=1 15 \
-  "$REPO_ROOT/diagnose.sh" --resume "$EARLY_REVOKE_BUNDLE" --yes \
+# Keep the real resume path, but rediscover this synthetic bundle's topology
+# so automatic CPU provenance validation reaches the readiness boundary.
+timeout --signal=TERM --kill-after=1 15 bash -c '
+  DIAG_SOURCE_ONLY=1
+  source "$1/diagnose.sh"
+  discover_topology() {
+    ONLINE_CPUS=0-23 P_CORES=0-3 E_CORES=16-19
+    GROUP_NAME=(pcores ecluster-64) GROUP_KIND=(pcore ecluster)
+    GROUP_CPUS=(0-3 16-19) GROUP_CLUSTER=(- 64)
+  }
+  main --resume "$2" --yes
+' _ "$REPO_ROOT" "$EARLY_REVOKE_BUNDLE" \
   > "$EARLY_REVOKE_ROOT/output" 2>&1
 early_revoke_rc=$?
 early_revoke_after="$(sha256sum "$EARLY_REVOKE_BUNDLE/results/meta.env" "$EARLY_REVOKE_BUNDLE/run.log")"
