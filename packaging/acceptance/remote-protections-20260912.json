@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "checkedAt": "2026-09-12T16:32:46Z",
+  "apiVersion": "2026-03-10",
+  "observedFromCommit": "d6c2226235bb91a0bf7a4d0ba9dd07bbcebe3a06",
+  "repository": {
+    "id": 1300493570,
+    "fullName": "gadicc/fault-affinity",
+    "visibility": "public",
+    "defaultBranch": "main",
+    "directWriters": [
+      {
+        "login": "gadicc",
+        "id": 381978,
+        "role": "admin"
+      }
+    ]
+  },
+  "branches": {
+    "main": {
+      "pullRequestRequired": true,
+      "dismissStaleReviews": true,
+      "requiredApprovingReviewCount": 0,
+      "strictStatusChecks": true,
+      "requiredStatusChecks": [
+        {
+          "context": "Safe validation",
+          "appId": 15368
+        },
+        {
+          "context": "Main receives promotions or hotfixes",
+          "appId": 15368
+        }
+      ],
+      "enforceAdmins": true,
+      "allowForcePushes": false,
+      "allowDeletions": false,
+      "requiredConversationResolution": true,
+      "requiredLinearHistory": false
+    },
+    "dev": {
+      "pullRequestRequired": true,
+      "dismissStaleReviews": true,
+      "requiredApprovingReviewCount": 0,
+      "strictStatusChecks": true,
+      "requiredStatusChecks": [
+        {
+          "context": "Safe validation",
+          "appId": 15368
+        }
+      ],
+      "enforceAdmins": true,
+      "allowForcePushes": false,
+      "allowDeletions": false,
+      "requiredConversationResolution": true,
+      "requiredLinearHistory": false
+    }
+  },
+  "tagRuleset": {
+    "id": 23068036,
+    "name": "Protect stable release tags",
+    "target": "tag",
+    "sourceType": "Repository",
+    "enforcement": "active",
+    "include": [
+      "refs/tags/v*"
+    ],
+    "exclude": [],
+    "rules": [
+      "update",
+      "deletion"
+    ],
+    "bypassActors": [],
+    "creationRestricted": false
+  },
+  "immutableReleases": {
+    "enabled": true,
+    "enforcedByOwner": false
+  },
+  "stableReleaseEnvironment": {
+    "id": 21790745567,
+    "name": "stable-release",
+    "canAdminsBypass": true,
+    "requiredReviewers": [
+      {
+        "type": "User",
+        "login": "gadicc",
+        "id": 381978
+      }
+    ],
+    "preventSelfReview": false,
+    "protectedBranches": true,
+    "customBranchPolicies": false
+  },
+  "artifactAndLogRetention": {
+    "days": 90,
+    "maximumAllowedDays": 90,
+    "requiredRecoveryDays": 30
+  },
+  "baselineTag": {
+    "name": "v0.0.0",
+    "annotatedObjectSha": "48ca6125350c12a04b3516535503d8b1ca090168",
+    "commitSha": "b281a4cd5ac0065cf22c9fbd1db689d7e37ef782"
+  }
+}

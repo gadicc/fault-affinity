@@ -24,7 +24,7 @@ import {
   writeModeManifest,
 } from "../lib/common.mjs";
 import { acquireRuntimeArchive, loadRuntimeLock } from "../lib/runtime-lock.mjs";
-import { classifyRecoveryState } from "../lib/recovery.mjs";
+import { classifyRecoveryState, RECOVERY_ASSET_NAMES } from "../lib/recovery.mjs";
 import { verifyRelease } from "../semantic-release-plan-guard.mjs";
 import { calculateReleasePlan } from "../release-plan.mjs";
 import { publishPlannedRelease } from "../publish-release.mjs";
@@ -35,6 +35,11 @@ import {
   buildQemuArguments,
   parseLiveIsoAcceptanceArguments,
 } from "../live-iso-acceptance.mjs";
+import {
+  makeRehearsalRunId,
+  parseRecoveryRehearsalArguments,
+  rehearsalVersion,
+} from "../rehearse-release-recovery.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -63,16 +68,208 @@ test("the live ISO lock pins the accepted Ubuntu Desktop image", () => {
   });
 });
 
-test("public publication remains blocked until every named acceptance gate is true", () => {
+test("public publication is enabled only with every named acceptance gate true", () => {
   const readiness = readReleaseReadiness(path.join(repositoryRoot,
     "packaging/release-readiness.json"));
-  assert.equal(readiness.publicReleaseEnabled, false);
+  assert.equal(readiness.publicReleaseEnabled, true);
   assert.deepEqual(readiness.gates, {
     resultPreparationLeaseVerified: true,
-    ubuntu2604LiveAcceptance: false,
-    releaseRecoveryRehearsal: false,
-    remoteProtectionsConfirmed: false,
+    ubuntu2604LiveAcceptance: true,
+    releaseRecoveryRehearsal: true,
+    remoteProtectionsConfirmed: true,
   });
+});
+
+test("accepted remote protections preserve promotion, release, tag, and recovery bounds", () => {
+  const evidence = JSON.parse(readFileSync(path.join(repositoryRoot,
+    "packaging/acceptance/remote-protections-20260912.json"), "utf8"));
+  assert.equal(evidence.schemaVersion, 1);
+  assert.equal(evidence.status, "passed");
+  assert.equal(evidence.repository.fullName, "gadicc/fault-affinity");
+  assert.equal(evidence.repository.defaultBranch, "main");
+  assert.deepEqual(evidence.repository.directWriters, [
+    { login: "gadicc", id: 381978, role: "admin" },
+  ]);
+  assert.deepEqual(Object.keys(evidence.branches).sort(), ["dev", "main"]);
+  for (const protection of Object.values(evidence.branches)) {
+    assert.equal(protection.pullRequestRequired, true);
+    assert.equal(protection.dismissStaleReviews, true);
+    assert.equal(protection.strictStatusChecks, true);
+    assert.equal(protection.enforceAdmins, true);
+    assert.equal(protection.allowForcePushes, false);
+    assert.equal(protection.allowDeletions, false);
+    assert.equal(protection.requiredConversationResolution, true);
+  }
+  assert.deepEqual(evidence.branches.main.requiredStatusChecks.map(({ context }) => context),
+    ["Safe validation", "Main receives promotions or hotfixes"]);
+  assert.deepEqual(evidence.branches.dev.requiredStatusChecks.map(({ context }) => context),
+    ["Safe validation"]);
+  assert.deepEqual(evidence.tagRuleset, {
+    id: 23068036,
+    name: "Protect stable release tags",
+    target: "tag",
+    sourceType: "Repository",
+    enforcement: "active",
+    include: ["refs/tags/v*"],
+    exclude: [],
+    rules: ["update", "deletion"],
+    bypassActors: [],
+    creationRestricted: false,
+  });
+  assert.deepEqual(evidence.immutableReleases,
+    { enabled: true, enforcedByOwner: false });
+  assert.equal(evidence.stableReleaseEnvironment.name, "stable-release");
+  assert.deepEqual(evidence.stableReleaseEnvironment.requiredReviewers,
+    [{ type: "User", login: "gadicc", id: 381978 }]);
+  assert.equal(evidence.stableReleaseEnvironment.protectedBranches, true);
+  assert.ok(evidence.artifactAndLogRetention.days >=
+    evidence.artifactAndLogRetention.requiredRecoveryDays);
+  assert.equal(evidence.baselineTag.name, "v0.0.0");
+  assert.match(evidence.baselineTag.annotatedObjectSha, /^[0-9a-f]{40}$/);
+  assert.match(evidence.baselineTag.commitSha, /^[0-9a-f]{40}$/);
+});
+
+test("accepted live ISO evidence is bound to the pinned image and a harmless dry run", () => {
+  const evidence = JSON.parse(readFileSync(path.join(repositoryRoot,
+    "packaging/acceptance/live-iso-20260912.json"), "utf8"));
+  const iso = JSON.parse(readFileSync(path.join(repositoryRoot,
+    "packaging/live-iso-lock.json"), "utf8"));
+  const transcript = readFileSync(path.join(repositoryRoot,
+    "packaging/acceptance/live-iso-20260912-transcript.txt"), "utf8");
+  assert.equal(evidence.schemaVersion, 1);
+  assert.equal(evidence.status, "passed");
+  assert.deepEqual(evidence.iso, {
+    filename: iso.filename,
+    bytes: iso.bytes,
+    sha256: iso.sha256,
+    volumeId: iso.volumeId,
+  });
+  assert.match(evidence.candidate.sourceCommit, /^[0-9a-f]{40}$/);
+  assert.equal(evidence.candidate.releaseVersion,
+    `0.1.0-dev.${evidence.candidate.sourceCommit.slice(0, 12)}`);
+  for (const digest of [
+    evidence.candidate.archiveSha256,
+    evidence.candidate.supportManifestSha256,
+    evidence.candidate.acceptanceHelperSha256,
+    evidence.candidate.extractorSha256,
+    evidence.hostHarness.sha256,
+  ]) assert.match(digest, /^[0-9a-f]{64}$/);
+  assert.deepEqual(evidence.vm, {
+    cpus: 4,
+    memoryMiB: 4096,
+    timeoutSeconds: 900,
+    acceleration: "kvm",
+    qemuVersion: "QEMU emulator version 11.1.1",
+  });
+  assert.deepEqual(evidence.checks, [
+    "pinned ISO identity",
+    "stock live-image dependencies",
+    "read-only candidate support checksums",
+    "final release checksums",
+    "structured safe extraction",
+    "bundled runtime versions",
+    "launcher help",
+    "result preparer help",
+    "ext4-backed dry run",
+    "dry run created no result content",
+  ]);
+  assert.match(transcript, /Fault Affinity reference dry run/);
+  assert.match(transcript, /Nothing was executed\./);
+  assert.match(transcript, /FAULT_AFFINITY_VM_ACCEPTANCE_OK/);
+  assert.match(transcript, /FAULT_AFFINITY_VM_STATUS=0/);
+  assert.doesNotMatch(transcript, /machineid|bootid|sessionid/);
+});
+
+test("accepted release-recovery evidence records every remote state and exact digest", () => {
+  const evidence = JSON.parse(readFileSync(path.join(repositoryRoot,
+    "packaging/acceptance/release-recovery-20260912.json"), "utf8"));
+  assert.equal(evidence.schemaVersion, 1);
+  assert.equal(evidence.status, "passed");
+  assert.equal(evidence.repository.private, true);
+  assert.equal(evidence.repository.archived, true);
+  assert.match(evidence.repository.commit, /^[0-9a-f]{40}$/);
+  assert.match(evidence.inputs.implementationCommit, /^[0-9a-f]{40}$/);
+  assert.match(evidence.inputs.stageSha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(evidence.checks.map((check) => [check.label, check.status]), [
+    ["missing tag refusal", 1],
+    ["tag without release inspection", 0],
+    ["tag without release recovery", 0],
+    ["published release inspection", 0],
+    ["published release idempotence", 0],
+    ["partial draft inspection", 0],
+    ["partial draft recovery", 0],
+    ["conflicting asset refusal", 1],
+    ["published incomplete refusal", 1],
+  ]);
+  const releases = Object.fromEntries(evidence.releases.map((release) =>
+    [release.tag.split(".").at(-1), release]));
+  for (const scenario of ["complete", "partial"]) {
+    assert.equal(releases[scenario].draft, false);
+    assert.equal(releases[scenario].prerelease, true);
+    assert.deepEqual(releases[scenario].assets.map((asset) => asset.name).sort(),
+      [...RECOVERY_ASSET_NAMES].sort());
+    for (const asset of releases[scenario].assets) {
+      assert.ok(asset.size > 0);
+      assert.match(asset.digest, /^sha256:[0-9a-f]{64}$/);
+    }
+  }
+  assert.equal(releases.conflict.draft, true);
+  assert.equal(releases.conflict.assets.length, 1);
+  assert.equal(releases.incomplete.draft, false);
+  assert.equal(releases.incomplete.assets.length, 0);
+});
+
+test("release-recovery rehearsal accepts only an explicitly repeated disposable repository", () => {
+  const repository = "gadicc/fault-affinity-release-rehearsal-test";
+  const commit = "7".repeat(40);
+  const argumentsFor = (confirmation = repository) => [
+    "--repository", repository,
+    "--confirm-disposable-repository", confirmation,
+    "--commit", commit,
+    "--implementation-commit", "8".repeat(40),
+    "--stage", "fixture-stage.tar.gz",
+    "--source-date-epoch", "1789200000",
+    "--output-directory", "fixture-evidence",
+    "--run-id", "20260912123456deadbeef",
+    "--archive-repository",
+  ];
+  const parsed = parseRecoveryRehearsalArguments(argumentsFor());
+  assert.equal(parsed.repository, repository);
+  assert.equal(parsed.confirmation, repository);
+  assert.equal(parsed.commit, commit);
+  assert.equal(parsed.implementationCommit, "8".repeat(40));
+  assert.equal(parsed.archiveRepository, true);
+  assert.equal(parsed.runId, "20260912123456deadbeef");
+  assert.throws(() => parseRecoveryRehearsalArguments(argumentsFor("gadicc/fault-affinity")),
+    /must match the required rehearsal pattern twice/);
+  assert.throws(() => parseRecoveryRehearsalArguments([
+    ...argumentsFor().slice(0, 1), "gadicc/fault-affinity", ...argumentsFor().slice(2),
+  ]), /must match the required rehearsal pattern twice/);
+});
+
+test("release-recovery rehearsal identities are unique and visibly non-production", () => {
+  const runId = makeRehearsalRunId(new Date("2026-09-12T12:34:56.789Z"), "deadbeef");
+  assert.equal(runId, "20260912123456deadbeef");
+  assert.equal(rehearsalVersion(runId, "partial"),
+    "0.0.0-rehearsal.20260912123456deadbeef.partial");
+  assert.throws(() => rehearsalVersion(runId, "production"), /invalid rehearsal version inputs/);
+  assert.deepEqual(RECOVERY_ASSET_NAMES, [
+    "fault-affinity-live-linux-x64.tar.gz",
+    "fault-affinity-live-linux-x64.tar.gz.sha256",
+    "fault-affinity-sbom.spdx.json",
+    "fault-affinity-sbom.spdx.json.sha256",
+    "SHA256SUMS",
+  ]);
+});
+
+test("release recovery discovers drafts separately and refreshes them by immutable release id", () => {
+  const recovery = readFileSync(path.join(repositoryRoot,
+    "packaging/recover-release.mjs"), "utf8");
+  assert.match(recovery, /releases\?per_page=100&page=/);
+  assert.match(recovery, /releases\/\$\{release\.id\}/);
+  assert.match(recovery, /prerelease: options\.tag\.includes\("-"\)/);
+  assert.doesNotMatch(recovery,
+    /refreshed = await github\(`\/repos\/\$\{options\.repository\}\/releases\/tags/);
 });
 
 test("runtime acquisition rejects content that differs from its lock", async () => {
@@ -291,6 +488,11 @@ test("recovery binds one artifact to the trusted completed main release run", ()
   const manual = structuredClone(fixture);
   manual.run.event = "workflow_dispatch";
   assert.equal(validateRecoveryRunProvenance(manual).artifactId, "54321");
+  for (const conclusion of ["success", "cancelled", "timed_out"]) {
+    const recoverable = structuredClone(fixture);
+    recoverable.run.conclusion = conclusion;
+    assert.equal(validateRecoveryRunProvenance(recoverable).artifactId, "54321");
+  }
 });
 
 test("recovery rejects user-selected artifacts without exact server provenance", () => {
@@ -299,7 +501,7 @@ test("recovery rejects user-selected artifacts without exact server provenance",
     (value) => { value.run.path = ".github/workflows/release.yml@main"; },
     (value) => { value.run.head_branch = "dev"; },
     (value) => { value.run.repository.full_name = "attacker/fault-affinity"; },
-    (value) => { value.run.conclusion = "cancelled"; },
+    (value) => { value.run.conclusion = "neutral"; },
     (value) => { value.run.event = "pull_request"; },
     (value) => { value.artifactsResponse.artifacts[0].expired = true; },
     (value) => { value.artifactsResponse.artifacts[0].workflow_run.head_sha = "8".repeat(40); },

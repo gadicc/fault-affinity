@@ -43,8 +43,9 @@ export function validateRecoveryRunProvenance({
   "RECOVERY_RUN_WORKFLOW_MISMATCH");
   requireCondition(run.head_branch === "main" && run.head_sha === expectedCommit,
     "workflow run does not bind the expected main commit", "RECOVERY_RUN_COMMIT_MISMATCH");
-  requireCondition(run.status === "completed" && ["success", "failure"].includes(run.conclusion),
-    "workflow run must be completed successfully or with a recoverable failure",
+  requireCondition(run.status === "completed" &&
+    ["success", "failure", "cancelled", "timed_out"].includes(run.conclusion),
+    "workflow run must be completed with a recoverable conclusion",
     "RECOVERY_RUN_STATE_INVALID");
   requireCondition(Number.isSafeInteger(run.run_attempt) && run.run_attempt >= 1,
     "workflow run attempt is invalid", "RECOVERY_RUN_STATE_INVALID");

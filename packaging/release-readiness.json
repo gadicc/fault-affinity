@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "publicReleaseEnabled": false,
+  "publicReleaseEnabled": true,
   "gates": {
     "resultPreparationLeaseVerified": true,
-    "ubuntu2604LiveAcceptance": false,
-    "releaseRecoveryRehearsal": false,
-    "remoteProtectionsConfirmed": false
+    "ubuntu2604LiveAcceptance": true,
+    "releaseRecoveryRehearsal": true,
+    "remoteProtectionsConfirmed": true
   }
 }
