@@ -6562,8 +6562,11 @@ exit 0
 EOF
 chmod +x "$INDIVIDUAL_TOPUP/bin/taskset" "$INDIVIDUAL_TOPUP/bin/node"
 PATH="$INDIVIDUAL_TOPUP/bin:$PATH" bash "$REPO_ROOT/single.sh" 19 2 "$INDIVIDUAL_TOPUP/results.tsv" 3 > /dev/null 2>&1
-check_eq "single.sh top-up records continuing run ids" $'19\t3\t0\t0\n19\t4\t0\t0' \
-  "$(cat "$INDIVIDUAL_TOPUP/results.tsv")"
+check_eq "single.sh top-up records continuing run ids" $'19\t3\t0\n19\t4\t0' \
+  "$(cut -f1-3 "$INDIVIDUAL_TOPUP/results.tsv")"
+check_eq "single.sh top-up records canonical elapsed seconds" "1" \
+  "$(awk -F '\t' 'BEGIN { ok=1 } NF != 4 || $4 !~ /^(0|[1-9][0-9]*)$/ { ok=0 } END { print ok }' \
+    "$INDIVIDUAL_TOPUP/results.tsv")"
 
 INDIVIDUAL_LEGACY="$TMP/individual-invalid-legacy"
 mkdir -p "$INDIVIDUAL_LEGACY"/{results,state}

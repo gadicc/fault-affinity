@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "startedAt": "2026-09-12T14:28:08.576Z",
+  "repository": {
+    "fullName": "gadicc/fault-affinity-release-rehearsal-20260912-a849a31",
+    "id": 1367373228,
+    "private": true,
+    "commit": "71ba8613e00f9d78068a98bf7fa6d8f4e1719cc0",
+    "archived": true
+  },
+  "inputs": {
+    "runId": "20260912190000a849a31f",
+    "implementationCommit": "a849a31404bffae77d86a26e739911f8328c4eeb",
+    "stageSha256": "3a7c077ef536d191efeb7071d79db06d7f94e0d61963ca0e6f908a80e93a4542",
+    "sourceDateEpoch": 1789215718,
+    "rehearsalScriptSha256": "14c9fd7aa854526068a34715791f9dd1bbc61314818fd837049c0e24f27218f0",
+    "recoveryScriptSha256": "a3f9e37fcb9c272c6a6815dc86e34a1c39e8d2f83169600ebaaf5be92136b441"
+  },
+  "checks": [
+    {
+      "label": "missing tag refusal",
+      "status": 1,
+      "expectedFailure": true,
+      "state": null,
+      "missing": null
+    },
+    {
+      "label": "tag without release inspection",
+      "status": 0,
+      "expectedFailure": false,
+      "state": "tag-without-release",
+      "missing": 5
+    },
+    {
+      "label": "tag without release recovery",
+      "status": 0,
+      "expectedFailure": false,
+      "state": null,
+      "missing": null
+    },
+    {
+      "label": "published release inspection",
+      "status": 0,
+      "expectedFailure": false,
+      "state": "published-complete",
+      "missing": 0
+    },
+    {
+      "label": "published release idempotence",
+      "status": 0,
+      "expectedFailure": false,
+      "state": null,
+      "missing": null
+    },
+    {
+      "label": "partial draft inspection",
+      "status": 0,
+      "expectedFailure": false,
+      "state": "matching-draft",
+      "missing": 4
+    },
+    {
+      "label": "partial draft recovery",
+      "status": 0,
+      "expectedFailure": false,
+      "state": null,
+      "missing": null
+    },
+    {
+      "label": "conflicting asset refusal",
+      "status": 1,
+      "expectedFailure": true,
+      "state": null,
+      "missing": null
+    },
+    {
+      "label": "published incomplete refusal",
+      "status": 1,
+      "expectedFailure": true,
+      "state": null,
+      "missing": null
+    }
+  ],
+  "releases": [
+    {
+      "id": 387596207,
+      "tag": "v0.0.0-rehearsal.20260912190000a849a31f.complete",
+      "draft": false,
+      "prerelease": true,
+      "assets": [
+        {
+          "name": "fault-affinity-live-linux-x64.tar.gz",
+          "size": 94917943,
+          "digest": "sha256:3c73a6cdac228cbed82788d4f794061afca988cd39ae242a7d314b185c3b9861"
+        },
+        {
+          "name": "fault-affinity-live-linux-x64.tar.gz.sha256",
+          "size": 103,
+          "digest": "sha256:5135b5e1f966554542d15737a015c9871039767bc76e9126cb5dc49d72ff8680"
+        },
+        {
+          "name": "fault-affinity-sbom.spdx.json",
+          "size": 3395,
+          "digest": "sha256:6bee30818ac774b9ff7653bd5181e8ad825f1cc8bd9720cf18dbab2178218973"
+        },
+        {
+          "name": "fault-affinity-sbom.spdx.json.sha256",
+          "size": 96,
+          "digest": "sha256:b3415e392e2c51f79cfc9caa778c002086aa8e318864933d4aaf4e581188ed79"
+        },
+        {
+          "name": "SHA256SUMS",
+          "size": 199,
+          "digest": "sha256:f21d885910aa02fb8caadec590233d4ed2fc718b9e0ec491915969a483619f3d"
+        }
+      ]
+    },
+    {
+      "id": 387596290,
+      "tag": "v0.0.0-rehearsal.20260912190000a849a31f.partial",
+      "draft": false,
+      "prerelease": true,
+      "assets": [
+        {
+          "name": "fault-affinity-live-linux-x64.tar.gz",
+          "size": 94918161,
+          "digest": "sha256:d12e266813da553e56d77d246a76bafb1defca3817a10bed18fa782904d0b457"
+        },
+        {
+          "name": "fault-affinity-live-linux-x64.tar.gz.sha256",
+          "size": 103,
+          "digest": "sha256:b0727be1286c847a9f5921887591de27ef966a06287a980e1bfe041fd5d0cea4"
+        },
+        {
+          "name": "fault-affinity-sbom.spdx.json",
+          "size": 3392,
+          "digest": "sha256:e5eed5278738c7f25bf5b3bd443db27ece2fef6d1d2db6718ad9a0eba0afdd61"
+        },
+        {
+          "name": "fault-affinity-sbom.spdx.json.sha256",
+          "size": 96,
+          "digest": "sha256:a4212e571780c0677f37805d061ca456530f1218f64819fa5ca41055eda6d8db"
+        },
+        {
+          "name": "SHA256SUMS",
+          "size": 199,
+          "digest": "sha256:88547008de29e6683d1356e6725fd54e959272ba06889a3fa56083629ee2f6c4"
+        }
+      ]
+    },
+    {
+      "id": 387596399,
+      "tag": "v0.0.0-rehearsal.20260912190000a849a31f.conflict",
+      "draft": true,
+      "prerelease": true,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "size": 38,
+          "digest": "sha256:851325edb930d04a2d2159f36675f4481f894626862e2225d78854c8de763963"
+        }
+      ]
+    },
+    {
+      "id": 387596474,
+      "tag": "v0.0.0-rehearsal.20260912190000a849a31f.incomplete",
+      "draft": false,
+      "prerelease": true,
+      "assets": []
+    }
+  ],
+  "completedAt": "2026-09-12T14:29:24.656Z"
+}
