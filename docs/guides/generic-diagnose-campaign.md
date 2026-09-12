@@ -5,6 +5,10 @@ multi-phase diagnostic sweep: a baseline, CPU-group screening,
 controller-aware pinned-concurrent screening, every-CPU localization, a
 focused controlled-load A/B/A comparison, and one final statistical report.
 
+If the affected CPU is unknown and failures appear to need activity on other
+cores, the optional [loaded discovery](loaded-discovery.md) is the more direct
+screen: it tests every detected E-core under the same verified P-core load.
+
 The command creates a schema-3 manifest-version-7 bundle. Its measured
 workload, condition workload, topology, schedules, executable identities, and
 phase manifests are immutable. Resume advances the existing committed
@@ -203,6 +207,14 @@ node fault-affinity.mjs summarize \
 For a complete public campaign, `report` also reconciles the published report
 files with the validated bundle before rendering them.
 
+At task completion, the terminal lists affected CPUs from isolated evidence or
+the selected finest pinned context, their rates, and the strongest candidate.
+It then prints a fresh dry-run A1/B/A2 command when an identity-preserving
+controlled-load recipe exists. WebAssembly and Node/PGlite campaign identities
+have separate confirmation recipes; a custom workload is never silently
+replaced with a built-in. A positive focused B leg remains visible separately
+when the discovery strata themselves are clean.
+
 ## Interpret the statistics conservatively
 
 The report treats `target-fault` and `corruption` as target outcomes. The rate
@@ -270,8 +282,9 @@ topology lookup, are what the manifest binds.
 ## Know what version 7 does not collect
 
 Version 7 intentionally keeps the topology phases condition-free and applies
-`yes-load` only to the focused controlled-load B leg. A full loaded sweep over
-every group or logical CPU would require a new explicitly bound protocol.
+`yes-load` only to the focused controlled-load B leg. Use the separately bound
+`loaded-discover` protocol for a loaded sweep over every selected target; its
+results are not pooled into the version-7 campaign.
 
 The campaign also does not collect generic telemetry, debugger transcripts,
 frequency-control results, or a privacy-review inventory. Use the separate

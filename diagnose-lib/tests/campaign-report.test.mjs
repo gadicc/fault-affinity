@@ -7,6 +7,9 @@ import test, { afterEach } from "node:test";
 import {
   buildCampaignReport,
   renderCampaignReportMarkdown,
+  renderCampaignCandidateSummary,
+  selectStrongestCampaignCandidate,
+  summarizeCampaignCandidates,
 } from "../../src/fault-affinity/campaign-report.mjs";
 import {
   publishCampaignReport,
@@ -149,6 +152,43 @@ function bundle() {
   };
 }
 
+function attempts(target, resolved, other = 0) {
+  return {
+    target,
+    pass: resolved - target,
+    other,
+    resolved,
+    rate: resolved === 0 ? null : target / resolved,
+  };
+}
+
+function candidateReport({
+  exact,
+  pinned = [],
+  groups = [],
+  workload = "wasm-churn-suite",
+  conditionWorkload = "yes-load",
+  controlledLoad,
+}) {
+  return {
+    workload: { id: workload },
+    conditionWorkload: { id: conditionWorkload },
+    phases: {
+      exactCpu: { cpus: exact.map(([cpu, value]) => ({ cpu, attempts: value })) },
+      pinnedConcurrent: { contexts: pinned },
+      groups: { contexts: groups },
+      ...(controlledLoad === undefined ? {} : { controlledLoad }),
+    },
+  };
+}
+
+function renderBuiltInCandidateSummary(report, options = {}) {
+  return renderCampaignCandidateSummary(report, {
+    ...options,
+    selectionSources: { measured: "built-in", condition: "built-in" },
+  });
+}
+
 test("campaign reports keep wave, child, per-CPU, and A/B/A statistics separate", () => {
   const report = buildCampaignReport(bundle());
   assert.equal(report.complete, true);
@@ -165,6 +205,163 @@ test("campaign reports keep wave, child, per-CPU, and A/B/A statistics separate"
   assert.equal(report.comparisons.controlledLoad.replicatedP < 0.05, true);
   assert.match(renderCampaignReportMarkdown(report), /Wave-level target observations/);
   assert.match(renderCampaignReportMarkdown(report), /B vs A1/);
+});
+
+test("candidate summary prefers and ranks isolated exact-CPU target evidence", () => {
+  const report = candidateReport({
+    exact: [
+      [6, attempts(1, 4)],
+      [3, attempts(2, 4)],
+      [1, attempts(2, 4)],
+      [5, attempts(0, 4)],
+    ],
+    pinned: [{
+      id: "high-pinned-rate",
+      activeCpus: [1],
+      cpus: [{ cpu: 1, attempts: attempts(1, 1) }],
+    }],
+    groups: [{ id: "pcores", kind: "pcore", cpus: [4, 5] }],
+  });
+
+  const summary = summarizeCampaignCandidates(report);
+  assert.deepEqual(summary.exact.map(({ cpu }) => cpu), [1, 3, 6]);
+  assert.deepEqual(selectStrongestCampaignCandidate(report), summary.exact[0]);
+  assert.match(renderBuiltInCandidateSummary(report, { outDir: "/tmp/follow-up" }),
+    /Strongest candidate: CPU 1 from isolated exact CPU evidence; 2\/4 = 50\.0%\./);
+  assert.match(renderBuiltInCandidateSummary(report, { outDir: "/tmp/follow-up" }),
+    /controlled-load --recipe wasm-churn-suite-aba \\\n    --target-cpu 1 --load-cpus 4,5 \\\n    --out-dir '\/tmp\/follow-up' --dry-run/);
+});
+
+test("candidate confirmation preserves the Node/PGlite campaign workload identity", () => {
+  const report = candidateReport({
+    exact: [[0, attempts(1, 2)], [1, attempts(0, 2)]],
+    workload: "node-pglite-suite",
+  });
+  assert.match(renderBuiltInCandidateSummary(report, { outDir: "confirm" }),
+    /controlled-load --recipe node-pglite-suite-aba/);
+});
+
+test("candidate confirmation does not substitute a recipe for custom sources using built-in IDs", () => {
+  const report = candidateReport({
+    exact: [[0, attempts(1, 2)], [1, attempts(0, 2)]],
+  });
+  const rendered = renderCampaignCandidateSummary(report, {
+    outDir: "confirm",
+    selectionSources: { measured: "custom-file", condition: "custom-file" },
+  });
+  assert.match(rendered, /No automatic A\/B\/A command/);
+  assert.match(rendered, /wasm-churn-suite.*yes-load/);
+  assert.doesNotMatch(rendered, /--recipe/);
+});
+
+test("pinned fallback keeps the finest stable context per CPU without pooling", () => {
+  const report = candidateReport({
+    exact: [[0, attempts(0, 4)], [1, attempts(0, 4)], [2, attempts(0, 4)], [3, attempts(0, 4)]],
+    pinned: [
+      {
+        id: "broad",
+        activeCpus: [0, 3, 4],
+        cpus: [{ cpu: 0, attempts: attempts(5, 5) }],
+      },
+      {
+        id: "fine-first",
+        activeCpus: [0, 5],
+        cpus: [{ cpu: 0, attempts: attempts(1, 2) }],
+      },
+      {
+        id: "fine-later",
+        activeCpus: [0, 6],
+        cpus: [{ cpu: 0, attempts: attempts(2, 2) }],
+      },
+      {
+        id: "one",
+        activeCpus: [1],
+        cpus: [{ cpu: 1, attempts: attempts(2, 4) }],
+      },
+      {
+        id: "two",
+        activeCpus: [2],
+        cpus: [{ cpu: 2, attempts: attempts(2, 4) }],
+      },
+    ],
+    groups: [{ id: "pcores", kind: "pcore", cpus: [1, 2] }],
+  });
+
+  const summary = summarizeCampaignCandidates(report);
+  const cpuZero = summary.pinned.find(({ cpu }) => cpu === 0);
+  assert.equal(cpuZero.context, "fine-first");
+  assert.equal(cpuZero.target, 1);
+  assert.equal(cpuZero.resolved, 2);
+  assert.deepEqual(selectStrongestCampaignCandidate(report), summary.pinned[0]);
+  assert.equal(summary.pinned[0].cpu, 1);
+  assert.match(renderBuiltInCandidateSummary(report, { outDir: "next-run" }),
+    /--target-cpu 1 --load-cpus 0,2,3 \\\n    --out-dir 'next-run' --dry-run/);
+});
+
+test("pinned fallback chooses its representative before filtering affected CPUs", () => {
+  const report = candidateReport({
+    exact: [[0, attempts(0, 4)]],
+    pinned: [
+      {
+        id: "coarse-affected",
+        activeCpus: [0, 1, 2],
+        cpus: [{ cpu: 0, attempts: attempts(2, 2) }],
+      },
+      {
+        id: "fine-unaffected",
+        activeCpus: [0],
+        cpus: [{ cpu: 0, attempts: attempts(0, 3) }],
+      },
+    ],
+  });
+
+  assert.deepEqual(summarizeCampaignCandidates(report).pinned, []);
+  assert.equal(selectStrongestCampaignCandidate(report), null);
+});
+
+test("candidate recommendation shell-quotes every output directory", () => {
+  const report = candidateReport({
+    exact: [[0, attempts(1, 2)], [1, attempts(0, 2)]],
+  });
+  for (const outDir of ["with spaces", "apostrophe's$cash", "line\nbreak"]) {
+    const rendered = renderBuiltInCandidateSummary(report, { outDir });
+    const quoted = `'${outDir.replaceAll("'", "'\"'\"'")}'`;
+    assert.ok(rendered.includes(`--out-dir ${quoted} --dry-run`), outDir);
+  }
+});
+
+test("candidate summary scopes a clean discovery result to its selected evidence strata", () => {
+  const report = candidateReport({
+    exact: [[0, attempts(0, 4)], [1, attempts(0, 0, 2)]],
+    pinned: [{
+      id: "unresolved",
+      activeCpus: [0],
+      cpus: [{ cpu: 0, attempts: attempts(0, 0, 3) }],
+    }],
+  });
+  assert.deepEqual(summarizeCampaignCandidates(report), { exact: [], pinned: [] });
+  assert.equal(selectStrongestCampaignCandidate(report), null);
+  assert.equal(renderCampaignCandidateSummary(report),
+    "No affected CPU candidate from isolated exact-CPU or selected finest " +
+      "pinned-concurrent evidence.\n");
+});
+
+test("candidate summary retains a positive focused controlled-load observation separately", () => {
+  const report = candidateReport({
+    exact: [[0, attempts(0, 4)], [1, attempts(0, 4)]],
+    controlledLoad: {
+      targetCpu: 1,
+      legs: [
+        { leg: "a1", attempts: attempts(0, 3) },
+        { leg: "b", attempts: attempts(3, 3) },
+        { leg: "a2", attempts: attempts(0, 3) },
+      ],
+    },
+  });
+  const rendered = renderCampaignCandidateSummary(report);
+  assert.match(rendered, /No affected CPU candidate from isolated exact-CPU/);
+  assert.match(rendered, /CPU 1 B leg 3\/3 = 100\.0%/);
+  assert.match(rendered, /not used to infer a from-scratch candidate/);
 });
 
 test("complete campaign reports publish idempotently and bind both artifacts", async () => {

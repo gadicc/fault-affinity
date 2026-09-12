@@ -1,0 +1,331 @@
+name: Stable release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Normal release or recovery from retained final bytes
+        type: choice
+        required: true
+        default: normal
+        options: [normal, recover]
+      recovery_run_id:
+        description: Workflow run containing the finalized artifact (recovery only)
+        required: false
+        type: string
+      recovery_artifact_name:
+        description: Exact finalized artifact name (recovery only)
+        required: false
+        type: string
+      recovery_tag:
+        description: Exact existing vX.Y.Z tag (recovery only)
+        required: false
+        type: string
+      recovery_commit:
+        description: Exact 40-hex tagged commit (recovery only)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
+
+jobs:
+  safe-validation:
+    if: github.event_name == 'push' || inputs.mode == 'normal'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - run: npm ci
+      - name: Run hermetic validation only
+        run: |
+          npm test
+          bash -n src/reference-kit/run-reference
+          bash -n packaging/templates/prepare-results
+      - name: Compile native harness without executing it
+        run: cc -O2 -Wall -Wextra -pthread -o "$RUNNER_TEMP/repro-c" repro-c.c
+
+  stage-linux-x64:
+    if: github.event_name == 'push' || inputs.mode == 'normal'
+    needs: safe-validation
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - run: npm ci
+      - name: Build version-neutral Linux stage
+        run: >-
+          node packaging/stage-linux.mjs
+          --output-directory "$RUNNER_TEMP/linux-stage"
+          --runtime-cache "$RUNNER_TEMP/runtime-cache"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: linux-x64-stage-${{ github.sha }}
+          path: ${{ runner.temp }}/linux-stage/fault-affinity-live-linux-x64.stage.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  release-readiness:
+    if: github.event_name == 'push' || inputs.mode == 'normal'
+    outputs:
+      enabled: ${{ steps.readiness.outputs.enabled }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+      - name: Validate reviewed release-readiness gates
+        id: readiness
+        run: >-
+          node packaging/release-readiness.mjs
+          packaging/release-readiness.json
+          "$GITHUB_OUTPUT"
+      - name: Explain disabled publication
+        if: steps.readiness.outputs.enabled != 'true'
+        run: echo "Public release is intentionally disabled by packaging/release-readiness.json."
+
+  publish:
+    if: >-
+      (github.event_name == 'push' || inputs.mode == 'normal') &&
+      github.ref == 'refs/heads/main' &&
+      needs.release-readiness.outputs.enabled == 'true'
+    needs: [stage-linux-x64, release-readiness]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: stable-release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v7
+        with:
+          name: linux-x64-stage-${{ github.sha }}
+          path: dist/stage
+
+      - name: Compute release plan with publish-capable token
+        id: plan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          node packaging/release-plan.mjs
+          --output dist/release-plan.json
+          --github-output "$GITHUB_OUTPUT"
+          --commit "$GITHUB_SHA"
+
+      - name: Stop cleanly when no release is due
+        if: steps.plan.outputs.status == 'no-release'
+        run: echo "No releasable Conventional Commits since the last tag."
+
+      - name: Finalize exact release bytes
+        if: steps.plan.outputs.status == 'release'
+        env:
+          PLANNED_VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")
+          node packaging/finalize-release.mjs \
+            --stage dist/stage/fault-affinity-live-linux-x64.stage.tar.gz \
+            --output-directory dist/release \
+            --version "$PLANNED_VERSION" \
+            --commit "$GITHUB_SHA" \
+            --source-date-epoch "$source_date_epoch"
+          (cd dist/release && sha256sum --check SHA256SUMS)
+          mkdir "$RUNNER_TEMP/final-smoke"
+          tar -xzf dist/release/fault-affinity-live-linux-x64.tar.gz \
+            -C "$RUNNER_TEMP/final-smoke"
+          "$RUNNER_TEMP/final-smoke/fault-affinity/bin/run-reference" --help
+          "$RUNNER_TEMP/final-smoke/fault-affinity/share/prepare-results" --help
+
+      - name: Retain finalized bytes and their release plan before publication
+        if: steps.plan.outputs.status == 'release'
+        uses: actions/upload-artifact@v6
+        with:
+          name: finalized-release-${{ github.sha }}
+          path: |
+            dist/release/
+            dist/release-plan.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Attest finalized release bytes
+        if: steps.plan.outputs.status == 'release'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/release/*
+
+      - name: Publish only the previously planned version and commit
+        if: steps.plan.outputs.status == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_RELEASE_VERSION: ${{ steps.plan.outputs.version }}
+          EXPECTED_RELEASE_COMMIT: ${{ github.sha }}
+        run: node packaging/publish-release.mjs
+
+  recovery-readiness:
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.mode == 'recover' &&
+      github.ref == 'refs/heads/main'
+    outputs:
+      enabled: ${{ steps.readiness.outputs.enabled }}
+      artifact_id: ${{ steps.provenance.outputs.artifact_id }}
+      artifact_name: ${{ steps.provenance.outputs.artifact_name }}
+      source_run_id: ${{ steps.provenance.outputs.source_run_id }}
+      source_commit: ${{ steps.provenance.outputs.source_commit }}
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate recovery commit before checkout
+        env:
+          COMMIT: ${{ inputs.recovery_commit }}
+        run: '[[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]'
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+      - name: Validate source run and bind its exact server-side artifact
+        id: provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_COMMIT: ${{ inputs.recovery_commit }}
+          RECOVERY_ARTIFACT_NAME: ${{ inputs.recovery_artifact_name }}
+        run: >-
+          node packaging/validate-recovery-run.mjs
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$RECOVERY_RUN_ID"
+          --commit "$RECOVERY_COMMIT"
+          --artifact-name "$RECOVERY_ARTIFACT_NAME"
+          --github-output "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.recovery_commit }}
+      - name: Validate tagged commit's release-readiness gates
+        id: readiness
+        run: >-
+          node packaging/release-readiness.mjs
+          packaging/release-readiness.json
+          "$GITHUB_OUTPUT"
+      - name: Explain disabled recovery publication
+        if: steps.readiness.outputs.enabled != 'true'
+        run: echo "Recovery publication is disabled by the tagged commit's readiness gates."
+
+  recover:
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.mode == 'recover' &&
+      needs.recovery-readiness.outputs.enabled == 'true'
+    needs: recovery-readiness
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: stable-release
+    steps:
+      - name: Validate explicit recovery inputs
+        env:
+          RUN_ID: ${{ inputs.recovery_run_id }}
+          ARTIFACT_NAME: ${{ inputs.recovery_artifact_name }}
+          TAG: ${{ inputs.recovery_tag }}
+          COMMIT: ${{ inputs.recovery_commit }}
+        run: |
+          [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ARTIFACT_NAME" =~ ^finalized-release-[0-9a-f]{40}$ ]]
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ARTIFACT_NAME" == "finalized-release-$COMMIT" ]]
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.recovery-readiness.outputs.source_commit }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - run: npm ci
+      - name: Download retained finalized bytes from the exact run
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ needs.recovery-readiness.outputs.artifact_id }}
+          path: dist/retained
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.recovery-readiness.outputs.source_run_id }}
+      - name: Verify retained checksums
+        env:
+          ASSETS: dist/retained/release
+        run: (cd "$ASSETS" && sha256sum --check SHA256SUMS)
+      - name: Inspect recovery state without mutation
+        id: recovery
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECOVERY_TAG: ${{ inputs.recovery_tag }}
+          RECOVERY_REPOSITORY: ${{ github.repository }}
+          RECOVERY_COMMIT: ${{ needs.recovery-readiness.outputs.source_commit }}
+        run: >-
+          node packaging/recover-release.mjs
+          --repository "$RECOVERY_REPOSITORY"
+          --tag "$RECOVERY_TAG"
+          --commit "$RECOVERY_COMMIT"
+          --assets-directory dist/retained/release
+          --plan dist/retained/release-plan.json
+          --mode inspect
+          --github-output "$GITHUB_OUTPUT"
+      - name: Attest retained release bytes before recovery publication
+        if: steps.recovery.outputs.state != 'published-complete'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/retained/release/*
+      - name: Recover exact release without replacing any asset
+        if: steps.recovery.outputs.state != 'published-complete'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECOVERY_TAG: ${{ inputs.recovery_tag }}
+          RECOVERY_REPOSITORY: ${{ github.repository }}
+          RECOVERY_COMMIT: ${{ needs.recovery-readiness.outputs.source_commit }}
+        run: >-
+          node packaging/recover-release.mjs
+          --repository "$RECOVERY_REPOSITORY"
+          --tag "$RECOVERY_TAG"
+          --commit "$RECOVERY_COMMIT"
+          --assets-directory dist/retained/release
+          --plan dist/retained/release-plan.json
+          --mode publish

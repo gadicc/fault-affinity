@@ -745,6 +745,20 @@ function renderExecutiveSummary(r, env) {
     L.push("", POINTWISE_INTERVAL_NOTE, "");
   }
 
+  const isolatedClean = isolated.length > 0 && isolated.every((cpu) => cpu.sigsegv === 0);
+  const pinnedFailures = concurrent.filter((cpu) => cpu.sigsegv > 0);
+  if (isolatedClean && pinnedFailures.length > 0) {
+    L.push("The isolated exact-CPU phase observed no SIGSEGV, while the separate authoritative pinned-concurrent contexts did observe SIGSEGV. These results are not contradictory: isolated and concurrent contexts are different exposure strata, and the concurrent findings are retained as exact CPU-to-child evidence.", "");
+  }
+
+  const cpuSelection = r.cpuSelectionStatus;
+  if (cpuSelection?.status === "resolved" && cpuSelection.policy === "auto") {
+    const source = cpuSelection.source === "pinned-concurrent"
+      ? `the authoritative pinned-concurrent context ${esc(cpuSelection.context ?? "unknown")}${Number.isSafeInteger(cpuSelection.activeCpuCount) ? ` (${cpuSelection.activeCpuCount}-CPU active set)` : ""}`
+      : "isolated exact-CPU evidence";
+    L.push(`Automatic follow-up CPU selection: CPU ${esc(cpuSelection.cpu)} from ${source}.`, "");
+  }
+
   const failingGroups = r.groupsStatus?.status === "complete"
     ? (r.groups ?? []).filter((group) => validReproCounts(group) && group.sigsegvCount > 0)
     : [];
@@ -1298,9 +1312,12 @@ export function renderReport(results) {
       for (const reason of r.frequencyAbStatus?.reasons ?? []) L.push(`- ${esc(reason)}`);
       L.push("");
     }
-    const selectionNote = r.cpuSelectionStatus?.policy === "fixed"
+    const selection = r.cpuSelectionStatus;
+    const selectionNote = selection?.policy === "fixed"
       ? "fixed by the stored CPU selection policy"
-      : "highest observed individual failure rate";
+      : selection?.source === "pinned-concurrent"
+        ? `automatic pinned-concurrent fallback from context ${esc(selection.context ?? "unknown")}${Number.isSafeInteger(selection.activeCpuCount) ? ` (${selection.activeCpuCount}-CPU active set)` : ""}; isolated evidence had no failing CPU`
+        : "automatic selection from the highest observed isolated failure rate";
     L.push(`Test CPU: ${fa.cpu} (${selectionNote}). Original`);
     L.push(`settings saved first; restored after the phase: ${fa.restored ? "yes" : "**NO — check intel_pstate/no_turbo and scaling_max_freq**"}.`);
     L.push("");

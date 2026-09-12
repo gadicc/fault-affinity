@@ -35,6 +35,7 @@ import {
   serializePinnedConcurrentPlan,
   serializePinnedConcurrentResults,
   sha256PinnedConcurrentBytes,
+  selectPinnedConcurrentCandidate,
   validateFreshPinnedConcurrentTargets,
 } from "../pinned-concurrent-evidence.mjs";
 
@@ -674,6 +675,25 @@ test("shell CLI builds canonical metadata and validates pre-run and terminal env
   assert.equal(terminal.status, 0, terminal.stderr);
   assert.match(terminal.stdout, /^PUBLICATION_READY=1$/m);
 
+  const published = createBundle();
+  const selected = spawnSync(
+    process.execPath,
+    [MODULE_FILE, "select-cpu", published.bundle, ...expectationArgs],
+    { encoding: "utf8" },
+  );
+  assert.equal(selected.status, 0, selected.stderr);
+  assert.equal(selected.stdout, "3\n");
+  assert.deepEqual(
+    selectPinnedConcurrentCandidate(assessPinnedConcurrentEvidence(published.bundle)),
+    {
+      cpu: 3,
+      context: "ecluster-0",
+      activeCpuCount: 2,
+      target: 1,
+      resolved: 2,
+    },
+  );
+
   const built = execFileSync(process.execPath, [
     MODULE_FILE,
     "build-meta",
@@ -703,4 +723,34 @@ test("shell CLI builds canonical metadata and validates pre-run and terminal env
   });
   assert.equal(refused.status, 1);
   assert.match(refused.stdout, /^STATUS=invalid$/m);
+});
+
+test("candidate selection retains a clean finest context before filtering failures", () => {
+  const assessment = {
+    status: "complete",
+    authoritative: true,
+    groups: [
+      { group: "wide", cpus: "0-3" },
+      { group: "fine", cpus: "0-1" },
+      { group: "other", cpus: "2-3" },
+    ],
+    descriptiveOutcomes: {
+      perCpu: [
+        { group: "wide", cpu: 0, runs: 4, sigsegv: 4 },
+        { group: "fine", cpu: 0, runs: 4, sigsegv: 0 },
+        { group: "other", cpu: 2, runs: 4, sigsegv: 1 },
+      ],
+    },
+  };
+  assert.deepEqual(selectPinnedConcurrentCandidate(assessment), {
+    cpu: 2,
+    context: "other",
+    activeCpuCount: 2,
+    target: 1,
+    resolved: 4,
+  });
+  assert.equal(selectPinnedConcurrentCandidate({
+    ...assessment,
+    descriptiveOutcomes: { perCpu: assessment.descriptiveOutcomes.perCpu.slice(0, 2) },
+  }), null);
 });

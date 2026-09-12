@@ -4,6 +4,7 @@ import {
   zeroFailureUpperBound,
 } from "../../diagnose-lib/stats.mjs";
 import { buildSchema3BundleSummary } from "./schema3-summary.mjs";
+import { listControlledLoadRecipes } from "./controlled-load-recipes.mjs";
 
 export const CAMPAIGN_REPORT_VERSION = 1;
 
@@ -279,6 +280,189 @@ export function buildCampaignReport(bundle) {
     },
   };
   return deepFreeze(report);
+}
+
+function affectedAttempts(attempts) {
+  return attempts?.target > 0 && attempts?.resolved > 0;
+}
+
+function candidateFromAttempts({ cpu, attempts, source, context = null, activeCpus = null }) {
+  return {
+    cpu,
+    source,
+    context,
+    activeCpus: activeCpus === null ? null : [...(activeCpus ?? [])],
+    target: attempts.target,
+    pass: attempts.pass,
+    other: attempts.other,
+    resolved: attempts.resolved,
+    rate: attempts.rate,
+  };
+}
+
+function strongerCandidate(left, right) {
+  const leftRate = BigInt(left.target) * BigInt(right.resolved);
+  const rightRate = BigInt(right.target) * BigInt(left.resolved);
+  if (leftRate !== rightRate) return leftRate > rightRate ? -1 : 1;
+  if (left.target !== right.target) return right.target - left.target;
+  if (left.resolved !== right.resolved) return right.resolved - left.resolved;
+  return left.cpu - right.cpu;
+}
+
+/**
+ * Return the non-pooled, endpoint-resolved target observations that can guide a
+ * follow-up controlled-load run. Exact-CPU observations are deliberately kept
+ * separate from pinned-concurrent observations. For pinned observations, an
+ * overlapping CPU retains only its finest (smallest active-CPU set) context
+ * before target observations are considered; equal-size contexts are resolved
+ * by context ID.
+ */
+export function summarizeCampaignCandidates(report) {
+  const exact = (report?.phases?.exactCpu?.cpus ?? [])
+    .filter(({ attempts }) => affectedAttempts(attempts))
+    .map(({ cpu, attempts }) => candidateFromAttempts({
+      cpu,
+      attempts,
+      source: "exact",
+    }))
+    .sort(strongerCandidate);
+
+  const pinnedByCpu = new Map();
+  for (const context of report?.phases?.pinnedConcurrent?.contexts ?? []) {
+    for (const { cpu, attempts } of context.cpus ?? []) {
+      const candidate = candidateFromAttempts({
+        cpu,
+        attempts,
+        source: "pinned",
+        context: context.id,
+        activeCpus: context.activeCpus,
+      });
+      const current = pinnedByCpu.get(cpu);
+      // Do not use rate to choose between overlapping contexts: that would
+      // silently privilege a coarser denominator. Equal-size contexts resolve
+      // by context ID, independently of the report's traversal order.
+      if (current === undefined || candidate.activeCpus.length < current.activeCpus.length ||
+          (candidate.activeCpus.length === current.activeCpus.length &&
+            candidate.context < current.context)) {
+        pinnedByCpu.set(cpu, candidate);
+      }
+    }
+  }
+  const pinned = [...pinnedByCpu.values()]
+    .filter(({ target, resolved }) => target > 0 && resolved > 0)
+    .sort(strongerCandidate);
+  return deepFreeze({ exact, pinned });
+}
+
+/**
+ * Pick one CPU for a new experiment. Any isolated exact-CPU target evidence
+ * outranks pinned evidence; pinned contexts are considered only when no exact
+ * CPU has a target observation.
+ */
+export function selectStrongestCampaignCandidate(report) {
+  const summary = summarizeCampaignCandidates(report);
+  return summary.exact[0] ?? summary.pinned[0] ?? null;
+}
+
+function loadCpusForCandidate(report, candidate) {
+  const exactCpus = (report?.phases?.exactCpu?.cpus ?? []).map(({ cpu }) => cpu);
+  const pcores = (report?.phases?.groups?.contexts ?? [])
+    .filter((context) => context.kind === "pcore")
+    .flatMap((context) => context.cpus ?? []);
+  const preferred = pcores.length > 0 && !pcores.includes(candidate.cpu)
+    ? pcores
+    : exactCpus;
+  return [...new Set(preferred)].filter((cpu) => cpu !== candidate.cpu).sort((left, right) => left - right);
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+}
+
+function matchingConfirmationRecipe(report, selectionSources) {
+  if (selectionSources?.measured !== "built-in" ||
+      selectionSources?.condition !== "built-in") return null;
+  const matches = listControlledLoadRecipes().filter((recipe) =>
+    recipe.measuredWorkload === report?.workload?.id &&
+    recipe.conditionWorkload === report?.conditionWorkload?.id);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function focusedLoadedObservation(report) {
+  const phase = report?.phases?.controlledLoad;
+  const attempts = phase?.legs?.find(({ leg }) => leg === "b")?.attempts;
+  return attempts?.target > 0 && attempts?.resolved > 0
+    ? { cpu: phase.targetCpu, attempts }
+    : null;
+}
+
+/**
+ * Render a compact terminal-only follow-up. This does not alter the stored
+ * report or its Markdown artifact; callers provide the destination directory
+ * that the dry run should validate.
+ */
+export function renderCampaignCandidateSummary(report, {
+  outDir = "OUT_DIR",
+  selectionSources,
+} = {}) {
+  const summary = summarizeCampaignCandidates(report);
+  const candidate = summary.exact[0] ?? summary.pinned[0] ?? null;
+  if (candidate === null) {
+    const lines = [
+      "No affected CPU candidate from isolated exact-CPU or selected finest " +
+        "pinned-concurrent evidence.",
+    ];
+    const loaded = focusedLoadedObservation(report);
+    if (loaded !== null) {
+      lines.push(`Focused controlled-load observation (reported separately): CPU ${loaded.cpu} ` +
+        `B leg ${loaded.attempts.target}/${loaded.attempts.resolved} = ` +
+        `${percentage(loaded.attempts.rate)}.`,
+      "This targeted B-leg result is not used to infer a from-scratch candidate.");
+    }
+    return `${lines.join("\n")}\n`;
+  }
+  const context = candidate.source === "exact"
+    ? "isolated exact CPU evidence"
+    : `pinned context ${candidate.context} (${candidate.activeCpus.join(",")})`;
+  const loadCpus = loadCpusForCandidate(report, candidate);
+  const lines = ["", "Affected CPU candidates:"];
+  if (summary.exact.length === 0) lines.push("  isolated: none observed");
+  else {
+    for (const row of summary.exact) {
+      lines.push(`  CPU ${row.cpu} isolated: ${row.target}/${row.resolved} = ` +
+        percentage(row.rate));
+    }
+  }
+  if (summary.pinned.length === 0) lines.push("  pinned-concurrent: none observed");
+  else {
+    for (const row of summary.pinned) {
+      lines.push(`  CPU ${row.cpu} pinned ${row.context} [${row.activeCpus.join(",")}]: ` +
+        `${row.target}/${row.resolved} = ${percentage(row.rate)}`);
+    }
+  }
+  lines.push(`Strongest candidate: CPU ${candidate.cpu} from ${context}; ` +
+    `${candidate.target}/${candidate.resolved} = ${percentage(candidate.rate)}.`);
+  if (loadCpus.length === 0) {
+    lines.push("No automatic A/B/A command: no separate load CPU is available.", "");
+    return lines.join("\n");
+  }
+  const recipe = matchingConfirmationRecipe(report, selectionSources);
+  if (recipe === null) {
+    lines.push("No automatic A/B/A command: there is no controlled-load recipe for the " +
+      `measured '${report?.workload?.id ?? "unknown"}' and condition ` +
+      `'${report?.conditionWorkload?.id ?? "unknown"}' workload identities.`,
+    "Repeat those same reviewed workload selections in a fresh controlled-load plan.", "");
+    return lines.join("\n");
+  }
+  lines.push(
+    "Recommended fresh A1/B/A2 confirmation:",
+    `  node fault-affinity.mjs controlled-load --recipe ${recipe.id} \\`,
+    `    --target-cpu ${candidate.cpu} --load-cpus ${loadCpus.join(",")} \\`,
+    `    --out-dir ${shellQuote(outDir)} --dry-run`,
+    "  Review the plan, then replace --dry-run with --yes.",
+    "",
+  );
+  return lines.join("\n");
 }
 
 function percentage(value) {

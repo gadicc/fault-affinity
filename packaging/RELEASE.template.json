@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "release": {
+    "version": "__VERSION__",
+    "tag": "__TAG__",
+    "sourceCommit": "__SOURCE_COMMIT__",
+    "builtAt": "1970-01-01T00:00:00.000Z",
+    "platform": "linux-x64"
+  },
+  "profile": {
+    "id": "load-aba-reference",
+    "version": 1,
+    "pgliteVersion": "0.5.4"
+  },
+  "runtimes": {
+    "controller": {
+      "version": "v24.21.0",
+      "sha256": "__CONTROLLER_BINARY_SHA256__"
+    },
+    "reference": {
+      "version": "v25.2.1",
+      "sha256": "__REFERENCE_BINARY_SHA256__"
+    }
+  },
+  "components": {
+    "treeDigestAlgorithm": "path-mode-size-content-sha256-v1",
+    "pgliteTreeSha256": "__PGLITE_TREE_SHA256__",
+    "appTreeSha256": "__APP_TREE_SHA256__"
+  }
+}

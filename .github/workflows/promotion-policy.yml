@@ -1,0 +1,41 @@
+name: Promotion policy
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  main-source:
+    name: Main receives promotions or hotfixes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+
+    steps:
+      - name: Validate pull request source
+        env:
+          BASE_REPOSITORY: ${{ github.repository }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$HEAD_REPOSITORY" != "$BASE_REPOSITORY" ]]; then
+            printf 'main pull requests must originate in %s, not %s\n' \
+              "$BASE_REPOSITORY" "$HEAD_REPOSITORY" >&2
+            exit 1
+          fi
+
+          case "$HEAD_BRANCH" in
+            dev | hotfix/*)
+              ;;
+            *)
+              printf '%s\n' \
+                'main accepts the dev promotion branch or an in-repository hotfix/* branch' >&2
+              exit 1
+              ;;
+          esac

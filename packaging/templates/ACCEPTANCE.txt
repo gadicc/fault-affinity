@@ -1,0 +1,38 @@
+Fault Affinity development acceptance candidate
+================================================
+
+This short-lived Actions artifact is for testing before a public release. It
+contains a finalized Linux kit plus acceptance-only support files. Nothing in
+this directory starts the diagnostic workload automatically.
+
+Start with a safe preview
+-------------------------
+
+Run these commands from this directory. Paste the whole parenthesized block;
+it stops at the first failed verification step.
+
+  (
+    set -eu
+    sha256sum --check ACCEPTANCE-SUPPORT-SHA256SUMS
+    sha256sum --check SHA256SUMS
+    kit_dir=$(mktemp -d)
+    python3 safe-extract.py \
+      fault-affinity-live-linux-x64.tar.gz \
+      "$kit_dir"
+    "$kit_dir/fault-affinity/bin/run-reference" --help
+    "$kit_dir/fault-affinity/bin/run-reference" --results-root "$HOME"
+  )
+
+The final command is a dry run. It validates the release and prints a plan; it
+does not create a result bundle or start the workload. CPU 19 and load CPUs
+0-7 are preserved case-study defaults, not automatic fault localization. If
+they do not fit the machine, stop and use a reviewed override or the separate
+discovery flow.
+
+For a confirmed run, persistent results, preparation, privacy review, and
+upload guidance, read README.txt inside the extracted kit and the public guide:
+
+  https://gadicc.github.io/fault-affinity/
+
+The acceptance-vm.sh file is only for the repository's QEMU harness. Do not
+run it directly on a physical system.

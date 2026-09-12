@@ -18,7 +18,7 @@ import {
 } from "../../fault-affinity.mjs";
 import { formatPhaseFailureDetails } from "../../src/fault-affinity/cli.mjs";
 import { readLinuxAllowedCpuList } from "../attempt-runner.mjs";
-import { expandCpuList } from "../pinned-runner.mjs";
+import { compressCpuList, expandCpuList } from "../pinned-runner.mjs";
 import { readSchema3Bundle } from "../schema3-bundle.mjs";
 import { resolveCustomWorkloadFile } from "../../workloads/catalog.mjs";
 
@@ -258,6 +258,25 @@ function topologyFixture(directory) {
   return { cpuRoot, deviceRoot, allowedCpuSpec: cpus.join(","), cpus };
 }
 
+function hybridTopologyFixture(directory) {
+  const cpus = allowedCpus(3);
+  const cpuRoot = path.join(directory, "hybrid-sysfs", "system", "cpu");
+  const deviceRoot = path.join(directory, "hybrid-sysfs", "devices");
+  mkdirSync(cpuRoot, { recursive: true });
+  mkdirSync(path.join(deviceRoot, "cpu_core"), { recursive: true });
+  mkdirSync(path.join(deviceRoot, "cpu_atom"), { recursive: true });
+  writeFileSync(path.join(cpuRoot, "online"), `${cpus.join(",")}\n`);
+  writeFileSync(path.join(deviceRoot, "cpu_core", "cpus"), `${cpus[0]}\n`);
+  writeFileSync(path.join(deviceRoot, "cpu_atom", "cpus"), `${cpus.slice(1).join(",")}\n`);
+  for (const [index, cpu] of cpus.entries()) {
+    const topology = path.join(cpuRoot, `cpu${cpu}`, "topology");
+    mkdirSync(topology, { recursive: true });
+    writeFileSync(path.join(topology, "physical_package_id"), "0\n");
+    writeFileSync(path.join(topology, "core_id"), `${index}\n`);
+  }
+  return { cpuRoot, deviceRoot, allowedCpuSpec: cpus.join(","), cpus };
+}
+
 function capture(cwd, extraIo = {}) {
   let stdout = "";
   let stderr = "";
@@ -449,6 +468,37 @@ test("argument parsing keeps live selection and confirmation explicit", () => {
     recipe: "wasm-churn-diagnose",
     resumeDir: "bundle",
   });
+  assert.deepEqual(parseFaultAffinityArgs([
+    "loaded-discover", "--target-cpus", "8-9", "--load-cpus", "0-7",
+    "--out-dir", "bundle", "--dry-run",
+  ]), {
+    command: "loaded-discover",
+    mode: "dry-run",
+    recipe: "wasm-churn-aba",
+    profile: "quick",
+    targetCpus: [8, 9],
+    targetCpuSpec: "8-9",
+    loadCpus: [0, 1, 2, 3, 4, 5, 6, 7],
+    loadCpuSpec: "0-7",
+    seed: 17,
+    outDir: "bundle",
+    tasksetPath: "/usr/bin/taskset",
+  });
+  assert.deepEqual(parseFaultAffinityArgs([
+    "loaded-discover", "--resume", "bundle", "--yes",
+  ]), {
+    command: "loaded-discover",
+    mode: "resume",
+    recipe: "wasm-churn-aba",
+    resumeDir: "bundle",
+  });
+  assert.throws(() => parseFaultAffinityArgs([
+    "loaded-discover", "--target-cpus", "8-9", "--out-dir", "bundle", "--dry-run",
+  ]), /must be supplied together/);
+  assert.throws(() => parseFaultAffinityArgs([
+    "loaded-discover", "--recipe", "node-pglite-suite-aba",
+    "--out-dir", "bundle", "--dry-run",
+  ]), /--recipe must be wasm-churn-aba/);
   assert.throws(() => parseFaultAffinityArgs([
     "diagnose", "--recipe", "wasm-churn-diagnose", "--condition-workload", "yes-load",
     "--out-dir", "bundle", "--dry-run",
@@ -506,6 +556,27 @@ test("the default diagnose dry run discovers and displays a complete quick campa
   assert.match(captured.stdout(), /pinned-concurrent: 2 context\(s\)/);
   assert.match(captured.stdout(), /3 attempt\(s\) per A1\/B\/A2 leg/);
   assert.match(captured.stdout(), /no workload executed and no bundle created/);
+});
+
+test("loaded discovery dry run screens detected E-cores under detected P-core load", async () => {
+  const directory = temporaryDirectory();
+  const topology = hybridTopologyFixture(directory);
+  const output = path.join(directory, "planned-loaded-discovery");
+  const captured = capture(directory, topology);
+  const rc = await runFaultAffinityCli([
+    "loaded-discover", "--out-dir", path.basename(output), "--dry-run",
+  ], captured.io);
+
+  assert.equal(rc, 0, captured.stderr());
+  assert.equal(existsSync(output), false);
+  assert.match(captured.stdout(), /loaded discovery plan/);
+  assert.match(captured.stdout(), /topology: sysfs-hybrid/);
+  assert.match(captured.stdout(), new RegExp(
+    `screen targets: ${compressCpuList(topology.cpus.slice(1))}`,
+  ));
+  assert.match(captured.stdout(), new RegExp(`verified load workers: ${topology.cpus[0]}`));
+  assert.match(captured.stdout(), /3 attempt\(s\) per A1\/B\/A2 leg/);
+  assert.match(captured.stdout(), /no workload executed and no collection created/);
 });
 
 test("a dry run validates baseline and bound exact schedules without creating output", async () => {

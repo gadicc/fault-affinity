@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+for name in NODE_OPTIONS NODE_PATH LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG \
+  DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH PYTHONHOME PYTHONPATH
+do
+  eval "present=\${${name}+yes}"
+  if [ "${present:-}" = yes ]; then
+    printf 'error: refusing injection-capable environment variable %s\n' "$name" >&2
+    exit 2
+  fi
+done
+
+if [ -z "${HOME:-}" ] || [ "${HOME#/}" = "$HOME" ]; then
+  printf 'error: HOME must be an absolute path\n' >&2
+  exit 2
+fi
+if [ ! -d "$HOME" ]; then
+  printf 'error: HOME must name an existing directory\n' >&2
+  exit 2
+fi
+safe_tmpdir=${TMPDIR:-/tmp}
+if [ "${safe_tmpdir#/}" = "$safe_tmpdir" ]; then
+  printf 'error: TMPDIR must be an absolute path\n' >&2
+  exit 2
+fi
+if [ ! -d "$safe_tmpdir" ]; then
+  printf 'error: TMPDIR must name an existing directory\n' >&2
+  exit 2
+fi
+
+kit_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+exec env -i PATH=/usr/bin:/bin HOME="$HOME" LANG="${LANG:-C.UTF-8}" \
+  TMPDIR="$safe_tmpdir" "$kit_dir/runtime/controller/bin/node" \
+  "$kit_dir/app/src/reference-kit/prepare-results.mjs" "$@"

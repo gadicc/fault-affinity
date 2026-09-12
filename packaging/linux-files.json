@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "regularFiles": [
+    { "source": "LICENSE.TXT", "destination": "LICENSES/fault-affinity-MIT.txt", "mode": "0644" },
+    { "source": "package.json", "destination": "app/package.json", "mode": "0644" },
+    { "source": "package-lock.json", "destination": "app/package-lock.json", "mode": "0644" },
+    { "source": "child.mjs", "destination": "app/child.mjs", "mode": "0644" },
+    { "source": "src/reference-kit/controller.mjs", "destination": "app/src/reference-kit/controller.mjs", "mode": "0644" },
+    { "source": "src/reference-kit/prepare-results.mjs", "destination": "app/src/reference-kit/prepare-results.mjs", "mode": "0644" },
+    { "source": "src/reference-kit/run-reference", "destination": "bin/run-reference", "mode": "0755" },
+    { "source": "diagnose-lib/attempt-evidence.mjs", "destination": "app/diagnose-lib/attempt-evidence.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/attempt-runner.mjs", "destination": "app/diagnose-lib/attempt-runner.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/attempt-supervisor.mjs", "destination": "app/diagnose-lib/attempt-supervisor.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/bundle-execution-lease.mjs", "destination": "app/diagnose-lib/bundle-execution-lease.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/controlled-load-session.mjs", "destination": "app/diagnose-lib/controlled-load-session.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/controlled-load-workers.mjs", "destination": "app/diagnose-lib/controlled-load-workers.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/individual-evidence.mjs", "destination": "app/diagnose-lib/individual-evidence.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/managed-workload-result.mjs", "destination": "app/diagnose-lib/managed-workload-result.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/pinned-concurrent-evidence.mjs", "destination": "app/diagnose-lib/pinned-concurrent-evidence.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/pinned-launch-worker.mjs", "destination": "app/diagnose-lib/pinned-launch-worker.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/pinned-protocol.mjs", "destination": "app/diagnose-lib/pinned-protocol.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/pinned-runner.mjs", "destination": "app/diagnose-lib/pinned-runner.mjs", "mode": "0644" },
+    { "source": "diagnose-lib/workload-spec.mjs", "destination": "app/diagnose-lib/workload-spec.mjs", "mode": "0644" }
+  ]
+}

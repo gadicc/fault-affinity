@@ -31,6 +31,19 @@ function signalExitCode(signal) {
   return signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1;
 }
 
+export function formatPinnedWaveFailureDetail(result) {
+  const failed = result?.attempts?.find(({ status }) => status !== "valid");
+  const evidence = failed?.evidence;
+  const details = [
+    Number.isSafeInteger(failed?.record?.cpu) ? `cpu=${failed.record.cpu}` : null,
+    result?.invalidReason ?? evidence?.outcome?.invalidReason ?? null,
+    result?.errorCode ?? failed?.errorCode ?? evidence?.observation?.launchErrorCode ??
+      evidence?.cleanup?.failureReason ?? evidence?.output?.stdout?.errorCode ??
+      evidence?.output?.stderr?.errorCode ?? null,
+  ].filter((value) => typeof value === "string" && value.length > 0);
+  return details.length === 0 ? null : [...new Set(details)].join("; ").slice(0, 4096);
+}
+
 export async function runPinnedWaveOwner(argv, io = {}) {
   const writeRecord = io.record ?? ((value) => writeSync(3, value));
   const stderr = io.stderr ?? ((value) => process.stderr.write(value));
@@ -56,6 +69,10 @@ export async function runPinnedWaveOwner(argv, io = {}) {
       bundleDir: parsed.bundleDir,
       attemptOptions: { signal: controller.signal },
     });
+    const detail = formatPinnedWaveFailureDetail(execution.result);
+    if (!execution.result.committed && detail !== null) {
+      stderr(`pinned wave detail: ${detail}\n`);
+    }
     writeRecord(`${JSON.stringify({
       version: OWNER_RECORD_VERSION,
       committed: execution.result.committed,

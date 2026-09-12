@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "filename": "ubuntu-26.04.1-desktop-amd64.iso",
+  "bytes": 6482409472,
+  "sha256": "601e30fbf5d97759367c632e2c33630665039b7e2158fd068403da3ccf1bda1f",
+  "volumeId": "Ubuntu 26.04.1 LTS amd64",
+  "releasePage": "https://releases.ubuntu.com/26.04.1/"
+}

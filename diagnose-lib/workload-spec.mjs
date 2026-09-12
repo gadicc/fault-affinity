@@ -834,6 +834,26 @@ export function resolveWorkloadLaunchCapsule(value) {
   return resolved;
 }
 
+// Reconstitutes only the public, cryptographically bound portion of a workload
+// for offline evidence validation. It intentionally has no WORKLOAD_ENVIRONMENT
+// property, so launch APIs reject it and no environment values or binding key
+// need to be persisted with diagnostic results.
+export function resolvePersistedWorkloadDescriptor(value, expectedDigest) {
+  const workload = validateCapsuleWorkload(value);
+  if (typeof expectedDigest !== "string" || !DIGEST_RE.test(expectedDigest)) {
+    fail("persisted workload digest is invalid", "INVALID_PERSISTED_WORKLOAD");
+  }
+  const digest = createHash("sha256").update(canonicalWorkloadJson(workload)).digest("hex");
+  if (digest !== expectedDigest) {
+    fail("persisted workload descriptor does not match its digest",
+      "INVALID_PERSISTED_WORKLOAD");
+  }
+  const resolved = { ...workload, digest };
+  Object.freeze(resolved);
+  RESOLVED_WORKLOADS.add(resolved);
+  return resolved;
+}
+
 
 function invalidAttempt(invalidReason, raw) {
   return Object.freeze({

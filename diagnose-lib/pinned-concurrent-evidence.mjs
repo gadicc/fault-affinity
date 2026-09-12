@@ -1663,6 +1663,47 @@ export function assessPinnedConcurrentEvidence(bundleDir, expectations = {}) {
   };
 }
 
+export function selectPinnedConcurrentCandidate(assessment) {
+  if (assessment?.status !== "complete" || assessment.authoritative !== true ||
+      !Array.isArray(assessment.groups) ||
+      !Array.isArray(assessment.descriptiveOutcomes?.perCpu)) return null;
+  const sizes = new Map();
+  for (const group of assessment.groups) {
+    const cpus = parsePinnedConcurrentCpuList(group?.cpus);
+    if (typeof group?.group !== "string" || cpus === null || cpus.length === 0) return null;
+    sizes.set(group.group, cpus.length);
+  }
+  const finest = new Map();
+  for (const row of assessment.descriptiveOutcomes.perCpu) {
+    const activeCpuCount = sizes.get(row?.group);
+    if (!Number.isSafeInteger(row?.cpu) || row.cpu < 0 ||
+        !Number.isSafeInteger(row?.sigsegv) || row.sigsegv < 0 ||
+        !Number.isSafeInteger(row?.runs) || row.runs < 0 ||
+        row.sigsegv > row.runs || !Number.isSafeInteger(activeCpuCount)) continue;
+    const candidate = {
+      cpu: row.cpu,
+      context: row.group,
+      activeCpuCount,
+      target: row.sigsegv,
+      resolved: row.runs,
+    };
+    const current = finest.get(candidate.cpu);
+    if (current === undefined || candidate.activeCpuCount < current.activeCpuCount ||
+        (candidate.activeCpuCount === current.activeCpuCount &&
+          candidate.context < current.context)) {
+      finest.set(candidate.cpu, candidate);
+    }
+  }
+  return [...finest.values()].filter((candidate) =>
+    candidate.target > 0 && candidate.resolved > 0).sort((left, right) => {
+    const leftRate = BigInt(left.target) * BigInt(right.resolved);
+    const rightRate = BigInt(right.target) * BigInt(left.resolved);
+    if (leftRate !== rightRate) return leftRate > rightRate ? -1 : 1;
+    return right.target - left.target || right.resolved - left.resolved ||
+      left.cpu - right.cpu;
+  })[0] ?? null;
+}
+
 export function validateFreshPinnedConcurrentTargets(bundleDir, options = {}) {
   const reasons = [];
   if (typeof bundleDir !== "string" || bundleDir.length === 0 || bundleDir.includes("\0")) return ["bundle path is invalid"];
@@ -1699,6 +1740,7 @@ function cliUsage() {
     "usage:",
     "  pinned-concurrent-evidence.mjs validate-before BUNDLE [GENERATION SOURCE_GROUP_GENERATION SOURCE_DIGEST ROUNDS SEED]",
     "  pinned-concurrent-evidence.mjs validate-complete BUNDLE [GENERATION SOURCE_GROUP_GENERATION SOURCE_DIGEST ROUNDS SEED]",
+    "  pinned-concurrent-evidence.mjs select-cpu BUNDLE [GENERATION SOURCE_GROUP_GENERATION SOURCE_DIGEST ROUNDS SEED]",
     "  pinned-concurrent-evidence.mjs build-meta --generation HEX32 --source-group-generation HEX32",
     "    --source-group-plan-digest HEX64 --rounds N --seed N --groups FILE --plan FILE",
     "    --completed 0|1 [--version 1|2] [--results FILE --boundaries FILE] [--output FILE]",
@@ -1909,10 +1951,21 @@ function buildMetaForCli(args) {
 
 function main(argv) {
   const [command, ...args] = argv;
-  if ((command === "validate-before" || command === "validate-complete") &&
+  if ((command === "validate-before" || command === "validate-complete" ||
+      command === "select-cpu") &&
       (args.length === 1 || args.length === 6)) {
     const [bundle, ...expectationArgs] = args;
     const assessment = assessPinnedConcurrentEvidence(bundle, cliExpectations(expectationArgs));
+    if (command === "select-cpu") {
+      if (assessment.status !== "complete" || assessment.authoritative !== true) {
+        for (const reason of assessment.reasons ?? []) console.error(reason);
+        process.exitCode = 1;
+        return;
+      }
+      const candidate = selectPinnedConcurrentCandidate(assessment);
+      if (candidate !== null) process.stdout.write(String(candidate.cpu) + "\n");
+      return;
+    }
     printCliAssessment(assessment);
     const valid = command === "validate-before"
       ? validateBeforeForCli(assessment)

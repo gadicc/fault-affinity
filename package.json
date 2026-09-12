@@ -1,6 +1,6 @@
 {
   "name": "fault-affinity",
-  "version": "1.0.0",
+  "version": "0.0.0-development",
   "private": true,
   "description": "Linux harness for bounded, resumable CPU-affinity fault diagnostics",
   "license": "MIT",
@@ -9,7 +9,9 @@
     "fault-affinity": "./fault-affinity.mjs"
   },
   "scripts": {
-    "test": "bash diagnose-lib/tests/run-tests.sh",
+    "test": "bash diagnose-lib/tests/run-tests.sh && npm run test:distribution",
+    "test:distribution": "node --test diagnose-lib/tests/reference-kit-tests.mjs packaging/tests/packaging.test.mjs && bash site/tests/run-tests.sh",
+    "acceptance:live-iso": "node packaging/live-iso-acceptance.mjs",
     "fault-affinity": "node fault-affinity.mjs",
     "repro": "node repro.mjs",
     "repro:long": "node repro.mjs 16 100",
@@ -25,5 +27,11 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "devDependencies": {
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/github": "12.0.9",
+    "@semantic-release/release-notes-generator": "14.1.1",
+    "semantic-release": "25.0.9"
   }
 }

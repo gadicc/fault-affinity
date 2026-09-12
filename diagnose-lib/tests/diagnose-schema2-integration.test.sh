@@ -152,6 +152,176 @@ for phase in baseline groups; do
   done
 done
 
+echo '== retained manual-phase CPU provenance =='
+for schema in 1 2; do
+  while IFS='|' read -r label completed planned pending recorded_cpu expected; do
+    provenance_required="$(
+      RUN_SCHEMA_VERSION="$schema"
+      RESUME_DIR="$TMP_ROOT/manual-provenance"
+      CPU_TARGET=auto
+      REDO_PLAN=()
+      REDO_TXN_ID=""
+      REDO_TXN_PHASES=()
+      [[ -z "$planned" ]] || read -r -a REDO_PLAN <<< "$planned"
+      if [[ -n "$pending" ]]; then
+        REDO_TXN_ID=redo-20260802T120000-ABC123
+        read -r -a REDO_TXN_PHASES <<< "$pending"
+      fi
+      phase_is_done() { [[ " $completed " == *" $1 "* ]]; }
+      gdb_completed_envelope_cpu() {
+        [[ "$recorded_cpu" != invalid ]] || return 1
+        printf '%s\n' "$recorded_cpu"
+      }
+      if resume_requires_auto_cpu_provenance; then
+        printf required
+      else
+        printf unnecessary
+      fi
+    )"
+    check_eq "schema $schema $label" "$expected" "$provenance_required"
+  done <<'CASES'
+incomplete manual phases need no early provenance||||8|unnecessary
+retained frequency requires early provenance|frequency|||8|required
+retained GDB CPU requires early provenance|gdb|||8|required
+validated GDB skip needs no early provenance|gdb|||-|unnecessary
+invalid GDB stays with the completed-envelope gate|gdb|||invalid|unnecessary
+planned GDB redo needs no early provenance|gdb|gdb||8|unnecessary
+planned frequency redo needs no early provenance|frequency|frequency||8|unnecessary
+pending GDB redo needs no early provenance|gdb||gdb|8|unnecessary
+pending frequency redo needs no early provenance|frequency||frequency|8|unnecessary
+retained frequency still requires provenance beside GDB redo|frequency gdb|gdb||8|required
+retained GDB still requires provenance beside frequency redo|frequency gdb|frequency||8|required
+retained frequency still requires provenance beside GDB skip|frequency gdb|||-|required
+redo of both manual phases needs no early provenance|frequency gdb|frequency gdb||8|unnecessary
+CASES
+done
+
+echo '== completed pinned-fallback resume gate =='
+# This is an intentionally small, fully validated schema-2 evidence fixture.
+# It contains a clean completed isolated phase plus one SIGSEGV in a completed
+# pinned-concurrent context.  The test calls the real worst_cpu path and the
+# real pinned evidence selector; only topology re-discovery is bypassed because
+# the synthetic two-CPU context is deliberately independent of this host.
+FALLBACK_RESUME_ROOT="$TMP_ROOT/completed-pinned-fallback-resume"
+mkdir -p -- "$FALLBACK_RESUME_ROOT/results" "$FALLBACK_RESUME_ROOT/state"
+REPO_ROOT="$REPO_ROOT" FALLBACK_RESUME_ROOT="$FALLBACK_RESUME_ROOT" node --input-type=module - <<'NODE'
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const root = process.env.FALLBACK_RESUME_ROOT;
+const repo = process.env.REPO_ROOT;
+const individual = await import(pathToFileURL(path.join(repo, "diagnose-lib/individual-evidence.mjs")));
+const pinned = await import(pathToFileURL(path.join(repo, "diagnose-lib/pinned-concurrent-evidence.mjs")));
+const digest = (value) => createHash("sha256").update(value).digest("hex");
+const generation = "1".repeat(32);
+const sourceGeneration = "2".repeat(32);
+const sourceDigest = "3".repeat(64);
+const cpus = [8, 9];
+const seed = 42;
+
+const individualPlan = individual.renderIndividualPlan(cpus, 1, seed);
+const individualPlanRows = individualPlan.trimEnd().split("\n").slice(1);
+const individualRows = `ordinal\tround\tposition\tcpu\toutcome\texit_code\tsignal\telapsed_sec\tstderr_sha256\tstderr_bytes\n${individualPlanRows.map((line) => {
+  const [ordinal, round, position, cpu] = line.split("\t");
+  return [ordinal, round, position, cpu, "pass", "0", "-", "0", digest(""), "0"].join("\t");
+}).join("\n")}\n`;
+const individualBoundaries = individualPlanRows.map((line, index) => {
+  const [ordinal, round, position, cpu] = line.split("\t");
+  const start = 1_800_000_000_000 + index * 1_000;
+  const monotonic = 5_000_000_000n + BigInt(index) * 1_000_000_000n;
+  return JSON.stringify({
+    ordinal: Number(ordinal), round: Number(round), position: Number(position), cpu: Number(cpu),
+    outcome: "pass", exitCode: 0, signal: null, stderrSha256: digest(""), stderrBytes: "0",
+    stderrExcerptBase64: "", stderrExcerptBytes: 0, stderrTruncated: false,
+    startUnixMs: start, endUnixMs: start, startMonotonicNs: monotonic.toString(),
+    endMonotonicNs: monotonic.toString(), durationNs: "0", durationMs: 0,
+    noTurboStart: 0, noTurboEnd: 0,
+  });
+}).join("\n") + "\n";
+writeFileSync(path.join(root, "results", "individual.plan.tsv"), individualPlan);
+writeFileSync(path.join(root, "results", "individual.tsv"), individualRows);
+writeFileSync(path.join(root, "results", "individual.boundaries.ndjson"), individualBoundaries);
+writeFileSync(path.join(root, "results", "individual.meta"),
+  `VERSION=6\nGENERATION=${generation}\nTARGET_CPUS=8-9\nRUNS_PER_CPU=1\n` +
+  `TARGET_POLICY=all-usable-cpus\nGROUP_PLAN_DIGEST=${sourceDigest}\nGROUP_GENERATION=${sourceGeneration}\n` +
+  `PROTOCOL=isolated-outcomes-v2\nSCHEDULE_SEED=${seed}\nSCHEDULE_ALGORITHM=balanced-cyclic-v1\n` +
+  `PLAN_SHA256=${digest(individualPlan)}\nPLAN_BYTES=${Buffer.byteLength(individualPlan)}\nPLAN_ROW_COUNT=${individualPlanRows.length}\n` +
+  `SKIPPED=0\nCOMPLETED=1\nROWS_SHA256=${digest(individualRows)}\nROWS_BYTES=${Buffer.byteLength(individualRows)}\nROW_COUNT=${individualPlanRows.length}\n` +
+  `BOUNDARIES_SHA256=${digest(individualBoundaries)}\nBOUNDARIES_BYTES=${Buffer.byteLength(individualBoundaries)}\nBOUNDARY_ROW_COUNT=${individualPlanRows.length}\n`);
+
+const groups = [{ group: "narrow", kind: "uniform", cpus: "8-9", cluster: "-", controller_cpu: 10, rounds: 1 }];
+const plan = [
+  { ordinal: 1, round: 1, group_position: 1, group: "narrow", controller_cpu: 10, launch_position: 1, cpu: 8 },
+  { ordinal: 2, round: 1, group_position: 1, group: "narrow", controller_cpu: 10, launch_position: 2, cpu: 9 },
+];
+const outcomes = plan.map((record, index) => ({
+  round: record.round, group: record.group, cpu: record.cpu, launch_position: record.launch_position,
+  rc: index === 0 ? 139 : 0, elapsed_ms: 1,
+}));
+const boundaryRows = plan.map((record, index) => ({
+  ordinal: record.ordinal, round: record.round, groupPosition: record.group_position,
+  group: record.group, controllerCpu: record.controller_cpu, launchPosition: record.launch_position,
+  cpu: record.cpu, startUnixMs: 1_800_000_100_000 + index, endUnixMs: 1_800_000_100_001 + index,
+  startMonotonicNs: String(6_000_000_000 + index * 1_000_000),
+  endMonotonicNs: String(6_001_000_000 + index * 1_000_000), durationNs: "1000000", durationMs: 1,
+  noTurboStart: 0, noTurboEnd: 0,
+}));
+const groupsText = pinned.serializePinnedConcurrentGroups(groups, { roundsPerContext: 1 });
+const planText = pinned.serializePinnedConcurrentPlan(plan, groups, { roundsPerContext: 1 });
+const outcomesText = pinned.serializePinnedConcurrentResults(outcomes, plan);
+const boundariesText = pinned.serializePinnedConcurrentBoundaries(boundaryRows, { planRows: plan, resultRows: outcomes });
+const meta = pinned.buildPinnedConcurrentMeta({
+  generation, sourceGroupGeneration: sourceGeneration, sourceGroupPlanDigest: sourceDigest,
+  roundsPerContext: 1, scheduleSeed: seed, groupsBytes: groupsText, groupsRowCount: groups.length,
+  planBytes: planText, planRowCount: plan.length, resultsBytes: outcomesText,
+  resultsRowCount: outcomes.length, boundariesBytes: boundariesText, boundariesRowCount: boundaryRows.length,
+  completed: true,
+});
+for (const [name, value] of Object.entries({
+  "pinned-concurrent.groups.tsv": groupsText, "pinned-concurrent.plan.tsv": planText,
+  "pinned-concurrent.tsv": outcomesText, "pinned-concurrent.boundaries.ndjson": boundariesText,
+  "pinned-concurrent.meta": pinned.serializePinnedConcurrentMeta(meta),
+})) writeFileSync(path.join(root, "results", name), value);
+writeFileSync(path.join(root, "state", "phase-individual.done"), "");
+writeFileSync(path.join(root, "state", "phase-pinned-concurrent.done"), "");
+writeFileSync(path.join(root, "state", "phase-gdb.done"), "");
+NODE
+printf 'CPU_TARGET=auto\n' > "$FALLBACK_RESUME_ROOT/results/meta.env"
+fallback_resume_rc=0
+fallback_resume_order="$(
+  (
+    OUT_DIR="$FALLBACK_RESUME_ROOT"
+    STATE_DIR="$FALLBACK_RESUME_ROOT/state"
+    META_FILE="$FALLBACK_RESUME_ROOT/results/meta.env"
+    RESUME_DIR="$FALLBACK_RESUME_ROOT"
+    RUN_SCHEMA_VERSION=2
+    CPU_TARGET=auto
+    PINNED_CONCURRENT_ROUNDS=1
+    PROTOCOL_SEED=42
+    compute_individual_targets() {
+      printf 'compute\n'
+      INDIVIDUAL_TARGET_POLICY=all-usable-cpus
+      INDIVIDUAL_TARGET_CPUS=8-9
+      INDIVIDUAL_GROUP_GENERATION=22222222222222222222222222222222
+      INDIVIDUAL_GROUP_PLAN_DIGEST=3333333333333333333333333333333333333333333333333333333333333333
+    }
+    # The fixture's context is synthetic; validate its complete digest-bound
+    # envelope but do not compare it to the machine's discovered topology.
+    pinned_concurrent_plan_matches_topology() { return 0; }
+    gdb_completed_envelope_cpu() { printf '8\n'; }
+    if resume_requires_auto_cpu_provenance; then
+      compute_individual_targets
+    fi
+    validate_completed_phase_overrides
+    printf 'validated\n'
+  )
+)" || fallback_resume_rc=$?
+check_eq 'completed GDB accepts a CPU selected by the real clean-isolated pinned fallback' \
+  $'compute\nvalidated' "$fallback_resume_order"
+check_eq 'completed pinned-fallback resume validation succeeds' 0 "$fallback_resume_rc"
+
 echo '== isolated executor crash recovery =='
 retryable_statuses=""
 for status in 132 133 134 135 136 137 139 141 152 153 159; do

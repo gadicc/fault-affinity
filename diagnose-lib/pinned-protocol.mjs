@@ -85,6 +85,11 @@ const DEBUGGER_PHASE_STATE_FILE_MAX_BYTES = 1024 * 1024;
 const DEBUGGER_ATTEMPT_ENVELOPE_STATE_FILE_MAX_BYTES = 8 * 1024 * 1024;
 const DEBUGGER_ATTEMPT_TRANSCRIPT_STATE_FILE_MAX_BYTES = 64 * 1024 * 1024;
 const DEBUGGER_ATTEMPT_CONTROL_STATE_FILE_MAX_BYTES = 64 * 1024;
+const LOADED_DISCOVERY_STATE_FILE_MAX_BYTES = Object.freeze({
+  "loaded-discovery.json": 1024 * 1024,
+  "loaded-discovery-report.json": 16 * 1024 * 1024,
+  "loaded-discovery-report.md": 16 * 1024 * 1024,
+});
 const PROTOCOL_MARKER = Symbol("pinnedProtocolPlan");
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -522,7 +527,7 @@ function fsyncDirectory(directory) {
 // The exact-CPU store reuses this proven no-clobber adapter in its own private
 // directory; legacy protocol readers still select only their own final names.
 const STATE_COMMIT_TEMP_RE =
-  /^\.(isolated-[0-9]{9}\.json|concurrent-[0-9]{9}-[a-z][a-z0-9_-]{0,63}\.json|exact-cpu-phase\.json|exact-cpu-attempt-[0-9]{9}\.json|baseline-phase\.json|baseline-wave-[0-9]{9}\.json|group-phase\.json|group-wave-[0-9]{9}\.json|pinned-concurrent-phase\.json|pinned-concurrent-wave-[0-9]{9}\.json|controlled-load-phase\.json|controlled-load-session\.json|debugger-phase\.json|debugger-attempt-[0-9]{9}-(?:envelope\.json|transcript|control)|fault-affinity-bundle\.json)\.([1-9][0-9]*)\.([a-f0-9]{16})\.(writing|ready)\.tmp$/;
+  /^\.(isolated-[0-9]{9}\.json|concurrent-[0-9]{9}-[a-z][a-z0-9_-]{0,63}\.json|exact-cpu-phase\.json|exact-cpu-attempt-[0-9]{9}\.json|baseline-phase\.json|baseline-wave-[0-9]{9}\.json|group-phase\.json|group-wave-[0-9]{9}\.json|pinned-concurrent-phase\.json|pinned-concurrent-wave-[0-9]{9}\.json|controlled-load-phase\.json|controlled-load-session\.json|debugger-phase\.json|debugger-attempt-[0-9]{9}-(?:envelope\.json|transcript|control)|fault-affinity-bundle\.json|loaded-discovery\.json|loaded-discovery-report\.(?:json|md))\.([1-9][0-9]*)\.([a-f0-9]{16})\.(writing|ready)\.tmp$/;
 
 function processIsLive(pidText) {
   const pid = Number(pidText);
@@ -553,6 +558,7 @@ function recoverInterruptedStateCommits(directory) {
         !name.startsWith(".pinned-concurrent-") &&
         !name.startsWith(".controlled-load-") &&
         !name.startsWith(".debugger-") &&
+        !name.startsWith(".loaded-discovery") &&
         !name.startsWith(".fault-affinity-bundle.json.")) continue;
     const match = name.match(STATE_COMMIT_TEMP_RE);
     if (match === null) continue;
@@ -567,7 +573,8 @@ function recoverInterruptedStateCommits(directory) {
 
     const temporaryPath = path.join(directory, name);
     const finalPath = path.join(directory, finalName);
-    const maximumBytes = finalName.startsWith("concurrent-")
+    const collectionMaximum = LOADED_DISCOVERY_STATE_FILE_MAX_BYTES[finalName];
+    const maximumBytes = collectionMaximum ?? (finalName.startsWith("concurrent-")
       ? MAX_WAVE_STATE_FILE_BYTES
       : finalName.startsWith("exact-cpu-")
         ? EXACT_CPU_STATE_FILE_MAX_BYTES
@@ -597,7 +604,7 @@ function recoverInterruptedStateCommits(directory) {
                                 ? DEBUGGER_ATTEMPT_CONTROL_STATE_FILE_MAX_BYTES
                     : finalName === "fault-affinity-bundle.json"
                       ? SCHEMA3_BUNDLE_STATE_FILE_MAX_BYTES
-                      : DEFAULT_STATE_FILE_MAX_BYTES;
+                      : DEFAULT_STATE_FILE_MAX_BYTES);
     let temporaryStat;
     try {
       temporaryStat = lstatSync(temporaryPath, { bigint: true });
@@ -631,12 +638,22 @@ function recoverInterruptedStateCommits(directory) {
         (finalStat.mode & 0o077n) !== 0n) {
       throw new PinnedProtocolStateError("published state commit temporary file is inconsistent");
     }
-    actions.push(temporaryPath);
+    actions.push({
+      temporaryPath,
+      // A discovery resume has no command-line replacement for its plan.
+      // Retain fully written, fsynced collection artifacts even if the writer
+      // died before the no-clobber link. Existing protocol recovery is unchanged.
+      publishPath: collectionMaximum !== undefined && stage === "ready" && finalStat === null
+        ? finalPath : null,
+    });
   }
 
   if (actions.length === 0) return;
   try {
-    for (const temporaryPath of actions) unlinkSync(temporaryPath);
+    for (const { temporaryPath, publishPath } of actions) {
+      if (publishPath !== null) linkSync(temporaryPath, publishPath);
+      unlinkSync(temporaryPath);
+    }
     fsyncDirectory(directory);
   } catch {
     throw new PinnedProtocolStateError("interrupted state commit could not be reconciled durably");

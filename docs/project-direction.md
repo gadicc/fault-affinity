@@ -149,7 +149,10 @@ a reviewed Linux topology plan, or accepts a bounded explicit plan, then
 advances all five v7 phases in order. Completed campaigns publish bound JSON
 and Markdown reports with separate wave, child, per-context, per-CPU, and
 A/B/A denominators. The read-only `report` command rederives and validates that
-view. Trusted custom JSON workloads declare their own capabilities.
+view. The separate `loaded-discover` command binds an automatic or explicit
+target sweep at the collection level, runs one resumable manifest-v5 A1/B/A2
+child per target, and publishes a complete cross-target report. Trusted custom
+JSON workloads declare their own capabilities.
 
 The published `wasm-churn` and `node-pglite` IDs retain their exact-only
 workload identities. Separate `wasm-churn-suite` and `node-pglite-suite`
@@ -195,11 +198,12 @@ interpretation.
 ## Keep remaining extensions explicit
 
 The v7 topology phases are intentionally condition-free; only the focused B
-leg runs the auxiliary load. A loaded group or every-CPU sweep needs a new
-bound protocol rather than an unrecorded switch. Generic telemetry and
-frequency-control collection likewise remain separate work: telemetry needs a
-workload-neutral association contract, while frequency changes remain
-privileged and must preserve the historical recovery guarantees.
+leg runs the auxiliary load. The separately bound `loaded-discover` collection
+screens every selected target under load without changing or pooling the v7
+phases. Generic telemetry and frequency-control collection likewise remain
+separate work: telemetry needs a workload-neutral association contract, while
+frequency changes remain privileged and must preserve the historical recovery
+guarantees.
 
 The v7 report does not claim to replace the legacy suite's telemetry, debugger
 transcripts, frequency evidence, or privacy-review inventory. Historical

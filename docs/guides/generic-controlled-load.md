@@ -46,6 +46,13 @@ The dry run resolves and hashes both executables, checks capabilities and CPU
 allowance, prints the fully expanded schedules, creates no bundle, and starts
 no process. After reviewing it, replace `--dry-run` with `--yes`.
 
+Completed diagnose campaigns recommend an identity-preserving confirmation
+recipe when one exists. `wasm-churn-suite-aba` preserves the
+`wasm-churn-suite` identity, while `node-pglite-suite-aba` preserves the
+historical heavyweight `node-pglite-suite` identity. Custom campaign workloads
+do not receive an automatic recipe substitution; repeat their reviewed
+workload selections with an explicit plan instead.
+
 ## Resume and summarize the recipe
 
 Recipe selection supplies both workload identities during resume:
