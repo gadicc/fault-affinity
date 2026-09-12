@@ -299,8 +299,14 @@ async function readRelease(options, item) {
 async function waitForAsset(options, item, name, expected) {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const release = await readRelease(options, item);
-    const asset = release.assets.find((candidate) => candidate.name === name);
-    if (asset?.size === expected.size && asset.digest === `sha256:${expected.sha256}`) return release;
+    if (release !== null) {
+      requireCondition(Array.isArray(release.assets),
+        "GitHub returned a release without an asset listing", "REHEARSAL_GITHUB_API_ERROR");
+      const asset = release.assets.find((candidate) => candidate.name === name);
+      if (asset?.size === expected.size && asset.digest === `sha256:${expected.sha256}`) {
+        return release;
+      }
+    }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
   throw new Error(`GitHub did not publish a verifiable digest for ${name}`);
