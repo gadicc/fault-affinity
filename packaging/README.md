@@ -149,6 +149,9 @@ and input hashes, checks, release IDs, asset sizes, and GitHub-provided digests.
 After remote setup succeeds, a failure writes the partial record and leaves the
 repository unarchived for inspection.
 
+The accepted 12 September 2026 run and its exact source artifact are recorded
+in [the release-recovery rehearsal evidence](../docs/release-recovery-rehearsal.md).
+
 GitHub's release-by-tag endpoint exposes only published releases; authenticated
 release listings include drafts for callers with push access. Recovery checks
 the published endpoint first, searches bounded listing pages for a draft, and
