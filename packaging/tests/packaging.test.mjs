@@ -24,7 +24,7 @@ import {
   writeModeManifest,
 } from "../lib/common.mjs";
 import { acquireRuntimeArchive, loadRuntimeLock } from "../lib/runtime-lock.mjs";
-import { classifyRecoveryState } from "../lib/recovery.mjs";
+import { classifyRecoveryState, RECOVERY_ASSET_NAMES } from "../lib/recovery.mjs";
 import { verifyRelease } from "../semantic-release-plan-guard.mjs";
 import { calculateReleasePlan } from "../release-plan.mjs";
 import { publishPlannedRelease } from "../publish-release.mjs";
@@ -35,6 +35,11 @@ import {
   buildQemuArguments,
   parseLiveIsoAcceptanceArguments,
 } from "../live-iso-acceptance.mjs";
+import {
+  makeRehearsalRunId,
+  parseRecoveryRehearsalArguments,
+  rehearsalVersion,
+} from "../rehearse-release-recovery.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -73,6 +78,59 @@ test("public publication remains blocked until every named acceptance gate is tr
     releaseRecoveryRehearsal: false,
     remoteProtectionsConfirmed: false,
   });
+});
+
+test("release-recovery rehearsal accepts only an explicitly repeated disposable repository", () => {
+  const repository = "gadicc/fault-affinity-release-rehearsal-test";
+  const commit = "7".repeat(40);
+  const argumentsFor = (confirmation = repository) => [
+    "--repository", repository,
+    "--confirm-disposable-repository", confirmation,
+    "--commit", commit,
+    "--implementation-commit", "8".repeat(40),
+    "--stage", "fixture-stage.tar.gz",
+    "--source-date-epoch", "1789200000",
+    "--output-directory", "fixture-evidence",
+    "--run-id", "20260912123456deadbeef",
+    "--archive-repository",
+  ];
+  const parsed = parseRecoveryRehearsalArguments(argumentsFor());
+  assert.equal(parsed.repository, repository);
+  assert.equal(parsed.confirmation, repository);
+  assert.equal(parsed.commit, commit);
+  assert.equal(parsed.implementationCommit, "8".repeat(40));
+  assert.equal(parsed.archiveRepository, true);
+  assert.equal(parsed.runId, "20260912123456deadbeef");
+  assert.throws(() => parseRecoveryRehearsalArguments(argumentsFor("gadicc/fault-affinity")),
+    /must match the required rehearsal pattern twice/);
+  assert.throws(() => parseRecoveryRehearsalArguments([
+    ...argumentsFor().slice(0, 1), "gadicc/fault-affinity", ...argumentsFor().slice(2),
+  ]), /must match the required rehearsal pattern twice/);
+});
+
+test("release-recovery rehearsal identities are unique and visibly non-production", () => {
+  const runId = makeRehearsalRunId(new Date("2026-09-12T12:34:56.789Z"), "deadbeef");
+  assert.equal(runId, "20260912123456deadbeef");
+  assert.equal(rehearsalVersion(runId, "partial"),
+    "0.0.0-rehearsal.20260912123456deadbeef.partial");
+  assert.throws(() => rehearsalVersion(runId, "production"), /invalid rehearsal version inputs/);
+  assert.deepEqual(RECOVERY_ASSET_NAMES, [
+    "fault-affinity-live-linux-x64.tar.gz",
+    "fault-affinity-live-linux-x64.tar.gz.sha256",
+    "fault-affinity-sbom.spdx.json",
+    "fault-affinity-sbom.spdx.json.sha256",
+    "SHA256SUMS",
+  ]);
+});
+
+test("release recovery discovers drafts separately and refreshes them by immutable release id", () => {
+  const recovery = readFileSync(path.join(repositoryRoot,
+    "packaging/recover-release.mjs"), "utf8");
+  assert.match(recovery, /releases\?per_page=100&page=/);
+  assert.match(recovery, /releases\/\$\{release\.id\}/);
+  assert.match(recovery, /prerelease: options\.tag\.includes\("-"\)/);
+  assert.doesNotMatch(recovery,
+    /refreshed = await github\(`\/repos\/\$\{options\.repository\}\/releases\/tags/);
 });
 
 test("runtime acquisition rejects content that differs from its lock", async () => {
