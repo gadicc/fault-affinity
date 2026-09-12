@@ -466,6 +466,16 @@ Never replace already published bytes silently. Retain enough final artifacts
 and metadata to recover within the documented retention window, and document
 the deterministic reconstruction path after that window.
 
+Before marking the recovery gate complete, run
+`packaging/rehearse-release-recovery.mjs` against a newly created private
+`fault-affinity-release-rehearsal-*` repository whose `main` points to the
+exact staged commit. Preserve its `rehearsal.json` record and archive the
+repository rather than deleting it. The record must show every expected
+refusal and convergence path, the implementation commit, exact script and
+stage hashes, published asset digests returned by GitHub, and the remote
+repository and release IDs.
+Failed rehearsals remain unarchived until their partial state is understood.
+
 ### GitHub Pages
 
 Build `site/` on changes merged to `main`, upload it as a Pages artifact, and

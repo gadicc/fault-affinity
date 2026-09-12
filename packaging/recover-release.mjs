@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { classifyRecoveryState } from "./lib/recovery.mjs";
+import { classifyRecoveryState, RECOVERY_ASSET_NAMES } from "./lib/recovery.mjs";
 import {
   COMMIT_RE,
   readJson,
@@ -24,13 +24,7 @@ import {
 
 const packagingDirectory = path.dirname(fileURLToPath(import.meta.url));
 
-const ASSET_NAMES = new Set([
-  "fault-affinity-live-linux-x64.tar.gz",
-  "fault-affinity-live-linux-x64.tar.gz.sha256",
-  "fault-affinity-sbom.spdx.json",
-  "fault-affinity-sbom.spdx.json.sha256",
-  "SHA256SUMS",
-]);
+const ASSET_NAMES = new Set(RECOVERY_ASSET_NAMES);
 
 function parseArguments(args) {
   const result = { repository: null, tag: null, commit: null, assetsDirectory: null, plan: null,
@@ -65,12 +59,30 @@ async function github(requestPath, options = {}) {
       ...(options.headers ?? {}),
     },
     redirect: "error",
+    signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
   });
   if (response.status === 404) return null;
   requireCondition(response.ok, `GitHub API ${requestPath} returned ${response.status}`,
     "GITHUB_API_ERROR");
   if (response.status === 204) return {};
   return response.json();
+}
+
+async function findRelease(repository, tag) {
+  const published = await github(
+    `/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`);
+  if (published !== null) return published;
+  for (let page = 1; page <= 100; page += 1) {
+    const releases = await github(`/repos/${repository}/releases?per_page=100&page=${page}`);
+    requireCondition(Array.isArray(releases), "GitHub returned an invalid release listing",
+      "GITHUB_API_ERROR");
+    const matching = releases.filter((release) => release.tag_name === tag);
+    requireCondition(matching.length <= 1,
+      "GitHub returned duplicate releases for one tag", "GITHUB_API_ERROR");
+    if (matching.length === 1) return matching[0];
+    if (releases.length < 100) return null;
+  }
+  throw new Error("release was not found within 10,000 repository releases");
 }
 
 async function dereferenceTag(repository, tag) {
@@ -152,6 +164,7 @@ async function uploadAsset(repository, release, name, local) {
     body: createReadStream(local.file),
     duplex: "half",
     redirect: "error",
+    signal: AbortSignal.timeout(120_000),
   });
   requireCondition(response.status === 201, `GitHub rejected asset ${name}: ${response.status}`,
     "GITHUB_API_ERROR");
@@ -168,7 +181,7 @@ async function main() {
   "retained release plan does not match recovery inputs", "RECOVERY_PLAN_MISMATCH");
   verifyRetainedRelease(options.assetsDirectory, plan);
   const tagCommit = await dereferenceTag(options.repository, options.tag);
-  let release = await github(`/repos/${options.repository}/releases/tags/${encodeURIComponent(options.tag)}`);
+  let release = await findRelease(options.repository, options.tag);
   let classification = classifyRecoveryState({ tagExists: tagCommit !== null, tagCommit,
     expectedCommit: options.commit, release, localAssets: assets });
   if (options.mode === "inspect") {
@@ -186,7 +199,8 @@ async function main() {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ tag_name: options.tag, target_commitish: options.commit,
-        name: options.tag, body: plan.nextRelease.notes, draft: true, prerelease: false }),
+        name: options.tag, body: plan.nextRelease.notes, draft: true,
+        prerelease: options.tag.includes("-") }),
     });
     requireCondition(release?.draft === true, "GitHub did not create the expected draft release");
     classification = { state: "matching-draft", missing: [...assets.keys()] };
@@ -197,7 +211,7 @@ async function main() {
   let refreshed;
   let verified;
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    refreshed = await github(`/repos/${options.repository}/releases/tags/${encodeURIComponent(options.tag)}`);
+    refreshed = await github(`/repos/${options.repository}/releases/${release.id}`);
     try {
       verified = classifyRecoveryState({ tagExists: true, tagCommit, expectedCommit: options.commit,
         release: refreshed, localAssets: assets });

@@ -1,5 +1,13 @@
 import { requireCondition, SHA256_RE } from "./common.mjs";
 
+export const RECOVERY_ASSET_NAMES = Object.freeze([
+  "fault-affinity-live-linux-x64.tar.gz",
+  "fault-affinity-live-linux-x64.tar.gz.sha256",
+  "fault-affinity-sbom.spdx.json",
+  "fault-affinity-sbom.spdx.json.sha256",
+  "SHA256SUMS",
+]);
+
 export function classifyRecoveryState({ tagExists, tagCommit, expectedCommit, release, localAssets }) {
   requireCondition(tagExists, "recovery refuses to create a missing release tag",
     "RECOVERY_TAG_ABSENT");

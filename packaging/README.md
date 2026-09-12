@@ -114,6 +114,47 @@ hosted disk is constrained, and nested acceleration is not a stable contract.
 If repeated remote runs become useful, use a manually dispatched job on a
 self-hosted KVM runner with the reviewed ISO already present.
 
+## Rehearse release recovery safely
+
+Run the recovery state machine against GitHub before enabling stable releases.
+Use a new private repository whose name begins
+`fault-affinity-release-rehearsal-`; never point this command at the real
+repository. The rehearsal refuses any repository that is public, archived,
+has the wrong `main` commit, or already contains tags or releases. It repeats
+the full repository name as an explicit confirmation and can archive the test
+repository after a successful run.
+
+Prepare an empty private repository, push the exact staged source commit to its
+`main` branch, and download the version-neutral Linux stage from the matching
+successful stable-release workflow run. Then run:
+
+```sh
+GH_TOKEN="$(gh auth token)" npm run rehearsal:release-recovery -- \
+  --repository OWNER/fault-affinity-release-rehearsal-NAME \
+  --confirm-disposable-repository OWNER/fault-affinity-release-rehearsal-NAME \
+  --commit 40_HEX_STAGE_COMMIT \
+  --implementation-commit 40_HEX_REHEARSAL_CODE_COMMIT \
+  --stage /path/to/linux-x64-stage.tar.gz \
+  --source-date-epoch COMMIT_TIMESTAMP_SECONDS \
+  --output-directory /new/path/recovery-rehearsal-evidence \
+  --archive-repository
+```
+
+The command creates only `0.0.0-rehearsal.*` prereleases. It exercises missing
+tag refusal, recovery when the tag has no release, a partially uploaded draft,
+conflicting retained bytes, a published incomplete release, and idempotent
+completion. Existing assets are never replaced. On success it writes
+`rehearsal.json` with the repository identity, implementation commit, script
+and input hashes, checks, release IDs, asset sizes, and GitHub-provided digests.
+After remote setup succeeds, a failure writes the partial record and leaves the
+repository unarchived for inspection.
+
+GitHub's release-by-tag endpoint exposes only published releases; authenticated
+release listings include drafts for callers with push access. Recovery checks
+the published endpoint first, searches bounded listing pages for a draft, and
+then refreshes that draft by release ID while uploads settle. See GitHub's
+[REST release documentation](https://docs.github.com/en/rest/releases/releases).
+
 Repository settings still required outside the tree:
 
 - keep `main` as the default branch and protect `main` and `dev`;
