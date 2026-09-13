@@ -179,13 +179,13 @@ live collection. Legacy controlled-load modes are documented separately in
 ## Zero-install Ubuntu reference kit
 
 The first distribution target is a self-contained Linux x86-64 kit for an
-official Ubuntu Desktop live session. It pins both the controller and reference
-Node runtimes, PGlite, and the A/B/A schedule, so a Windows user can collect a
-fixed known-target result without installing Node, npm, Git, or a compiler on
-Windows. The optional `loaded-discover` command is the general
-start-from-scratch loaded screen when the kit contains a release that supports
-it. The bootstrap only downloads and verifies the kit; running the workload
-still requires a separate, explicit `--yes` confirmation.
+official Ubuntu Desktop live session. It pins both Node runtimes, PGlite, and
+the A/B/A schedules, so a Windows user can screen the physical CPUs without
+installing Node, npm, Git, or a compiler on Windows. `discover-reference`
+selects a candidate from a short loaded screen, and `confirm-reference`
+collects a fresh 20-attempt A1/B/A2 comparison. The historical CPU 19 profile
+remains available through `run-reference`. Every command is dry by default;
+live work requires a separate command ending in `--yes`.
 
 Public release publication is guarded by checked-in acceptance gates, reviewed
 promotion to protected `main`, and manual `stable-release` approval. See

@@ -374,6 +374,7 @@ with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary
 
     members = []
     canonical_names = set()
+    canonical_members = {}
     total_size = 0
     required = {
         "fault-affinity/MODE-MANIFEST.json",
@@ -413,6 +414,7 @@ with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary
                 if canonical in canonical_names:
                     fail(f"archive contains a duplicate path: {canonical!r}")
                 canonical_names.add(canonical)
+                canonical_members[canonical] = member
                 if path.parts[0] != "fault-affinity":
                     fail(f"archive has an unexpected top-level layout: {member.name!r}")
                 if len(path.parts) == 1 and not member.isdir():
@@ -435,13 +437,20 @@ with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary
                 fail(f"archive is missing required entries: {', '.join(sorted(missing))}")
 
             discovery_members = {
-                "fault-affinity/app/src/reference-kit/discovery-cli.mjs",
-                "fault-affinity/bin/discover-reference",
+                "fault-affinity/app/src/reference-kit/discovery-cli.mjs": 0o644,
+                "fault-affinity/app/src/reference-kit/confirmation-cli.mjs": 0o644,
+                "fault-affinity/bin/discover-reference": 0o755,
+                "fault-affinity/bin/confirm-reference": 0o755,
             }
-            present_discovery_members = discovery_members & canonical_names
-            if len(present_discovery_members) == 1:
+            present_discovery_members = set(discovery_members) & canonical_names
+            if present_discovery_members and present_discovery_members != set(discovery_members):
                 fail("archive contains an incomplete guided-discovery capability")
-            has_discovery = present_discovery_members == discovery_members
+            has_discovery = present_discovery_members == set(discovery_members)
+            if has_discovery:
+                for name, expected_mode in discovery_members.items():
+                    member = canonical_members[name]
+                    if not member.isfile() or stat.S_IMODE(member.mode) != expected_mode:
+                        fail("archive contains an unusable guided-discovery capability")
 
             staging.mkdir(mode=0o700)
             try:
@@ -496,6 +505,19 @@ with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary
                 source_commit = release_info.get("sourceCommit")
                 if not isinstance(source_commit, str) or not SOURCE_COMMIT_PATTERN.fullmatch(source_commit):
                     fail("RELEASE.json source commit is invalid")
+                capabilities = release.get("capabilities")
+                if capabilities is None:
+                    declares_discovery = False
+                else:
+                    if not isinstance(capabilities, dict):
+                        fail("RELEASE.json capabilities declaration is invalid")
+                    for capability in ("referenceDiscovery", "referenceConfirmation"):
+                        version = capabilities.get(capability)
+                        if type(version) is not int or version != 1:
+                            fail("RELEASE.json guided-discovery capability is invalid")
+                    declares_discovery = True
+                if has_discovery != declares_discovery:
+                    fail("RELEASE.json guided-discovery capability does not match the archive")
                 runtime_lines = []
                 for role in ("controller", "reference"):
                     identity = runtimes.get(role)

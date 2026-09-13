@@ -36,6 +36,7 @@ expect_success() {
     grep -q "No workload was started" output
     if [ "$capability" = discovery ]; then
       test -x fault-affinity-v0.1.0/bin/discover-reference
+      test -x fault-affinity-v0.1.0/bin/confirm-reference
       grep -q -- '/bin/discover-reference.*--results-root "$HOME" --dry-run' output
     else
       test ! -e fault-affinity-v0.1.0/bin/discover-reference
@@ -70,6 +71,17 @@ expect_success legacy-valid legacy
 
 make_fixture partial-discovery partial-discovery
 expect_failure partial-discovery
+
+make_fixture partial-confirmation partial-confirmation
+expect_failure partial-confirmation
+
+for variant in \
+  declaration-only partial-capability boolean-capability \
+  guided-launcher-wrong-type guided-launcher-wrong-mode guided-source-wrong-mode
+do
+  make_fixture "$variant" "$variant"
+  expect_failure "$variant"
+done
 
 mkdir -p "$temporary/work/limited-preview"
 (
