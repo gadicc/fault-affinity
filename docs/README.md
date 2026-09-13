@@ -43,6 +43,7 @@ This index separates instructions for running the current tooling from the resul
 - [Workload catalog](../workloads/README.md): built-in roles and custom workload-contract JSON
 - [Source layout](../src/README.md): stable entry points, internal generic modules, and compatibility-sensitive paths
 - [Develop and test the tooling](development.md): offline tests, safe test scope, and repository boundaries
+- [Review the v0.2.0 publication receipt](release-v0.2.0-verification.md): immutable release identity, asset hashes, provenance, recovery bytes, and validation boundaries
 - [Understand internal attempt records](reference/attempt-records.md): workload binding, typed outcomes, cleanup evidence, and canonical record bindings
 - [Understand internal exact-CPU phase envelopes](reference/exact-cpu-phase-envelopes.md): schedule identity, attempt slots, affinity, durable publication, and exact-prefix resume
 - [Understand baseline concurrent waves](reference/baseline-concurrent-waves.md): correlated wave identity, child slots, all-or-nothing publication, and exact-prefix resume
