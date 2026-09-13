@@ -21,6 +21,7 @@ export const REFERENCE_DISCOVERY_MAX_TARGETS = 32;
 export const REFERENCE_DISCOVERY_MAX_WORKERS = 64;
 export const REFERENCE_DISCOVERY_MAX_HISTORY_GENERATIONS = 64;
 export const REFERENCE_DISCOVERY_MINIMUM_HEADROOM_BYTES = 2n * 1024n * 1024n * 1024n;
+export const REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES = 64n * 1024n * 1024n;
 
 export const REFERENCE_DISCOVERY_PROFILE = Object.freeze({
   id: "reference-loaded-discovery",
@@ -42,12 +43,28 @@ const UINT_RE = /^(0|[1-9][0-9]*)$/;
 const CORE_ID_RE = /^(0|[1-9][0-9]{0,9})$/;
 const TARGET_CATEGORIES = new Set(["target-fault", "corruption"]);
 const CLASS_SOURCES = new Set(["sysfs-hybrid", "unavailable", "partial"]);
+const CGROUP_STATUSES = new Set(["resolved-limited", "resolved-unlimited", "unavailable"]);
 const HISTORY_REASONS = new Set([
   "committed", "complete", "operational-invalid", "external-cancel", "owner-error",
   "runner-error", "evidence-invalid", "condition-invalid", "envelope-invalid",
   "reconciled-interruption",
 ]);
 const ERROR_CODE_RE = /^[A-Z0-9_]{1,64}$/;
+const PERSISTENCE_CLASSES = new Set([
+  "likely-persistent", "volatile-or-live-layer", "unknown",
+]);
+const NON_UNIX_FILESYSTEMS = new Set(["vfat", "exfat", "ntfs", "ntfs3", "fuseblk"]);
+const VOLATILE_FILESYSTEMS = new Set(["tmpfs", "ramfs", "overlay", "aufs"]);
+const EPHEMERAL_BLOCK_SOURCE_RE = /^\/dev\/(?:loop|ram|zram)[0-9]+(?:p[0-9]+)?$/;
+const DISCOVERY_OUTPUT_NAME_RE =
+  /^reference-discovery-[0-9]{8}T[0-9]{6}Z(?:-[a-z0-9][a-z0-9-]{0,31})?$/;
+const STORAGE_WARNINGS = Object.freeze({
+  "likely-persistent": null,
+  "volatile-or-live-layer":
+    "WARNING: results appear to be on volatile live-session storage and may disappear at shutdown. Choose mounted persistent media.",
+  unknown:
+    "WARNING: results storage persistence could not be established. Confirm this path is on mounted persistent media before running.",
+});
 const AUTHORITATIVE_CHILDREN = new WeakMap();
 const GENERATED_REPORTS = new WeakSet();
 
@@ -334,21 +351,27 @@ function parseHost(value, usableCpus) {
 
 function parseResources(value) {
   exactKeys(value, [
-    "memAvailableBytes", "cgroupCurrentBytes", "cgroupMaxBytes",
+    "memAvailableBytes", "cgroupStatus", "cgroupCurrentBytes", "cgroupMaxBytes",
     "effectiveHeadroomBytes", "minimumHeadroomBytes", "meetsMinimum",
   ], "reference discovery resources");
   const memAvailable = BigInt(uintString(value.memAvailableBytes,
     "reference discovery MemAvailable"));
+  if (!CGROUP_STATUSES.has(value.cgroupStatus)) {
+    fail("reference discovery cgroup status is unsupported");
+  }
   const current = value.cgroupCurrentBytes === null ? null :
     BigInt(uintString(value.cgroupCurrentBytes, "reference discovery cgroup current"));
   const maximum = value.cgroupMaxBytes === null ? null :
     BigInt(uintString(value.cgroupMaxBytes, "reference discovery cgroup maximum"));
-  if ((maximum !== null && current === null) ||
-      (current !== null && maximum !== null && current > maximum)) {
+  if ((value.cgroupStatus === "resolved-limited" &&
+        (maximum === null || current === null)) ||
+      (value.cgroupStatus !== "resolved-limited" &&
+        (maximum !== null || current !== null))) {
     fail("reference discovery cgroup memory observation is inconsistent");
   }
-  const expectedHeadroom = maximum === null ? memAvailable :
-    (memAvailable < maximum - current ? memAvailable : maximum - current);
+  const cgroupHeadroom = maximum === null ? null : maximum > current ? maximum - current : 0n;
+  const expectedHeadroom = value.cgroupStatus === "unavailable" ? 0n :
+    cgroupHeadroom === null || memAvailable < cgroupHeadroom ? memAvailable : cgroupHeadroom;
   const effective = BigInt(uintString(value.effectiveHeadroomBytes,
     "reference discovery effective headroom"));
   const minimum = BigInt(uintString(value.minimumHeadroomBytes,
@@ -360,11 +383,87 @@ function parseResources(value) {
   }
   return deepFreeze({
     memAvailableBytes: memAvailable.toString(),
+    cgroupStatus: value.cgroupStatus,
     cgroupCurrentBytes: current?.toString() ?? null,
     cgroupMaxBytes: maximum?.toString() ?? null,
     effectiveHeadroomBytes: effective.toString(),
     minimumHeadroomBytes: minimum.toString(),
     meetsMinimum: value.meetsMinimum,
+  });
+}
+
+function optionalBoundedString(value, label, maximum = 4096) {
+  return value === null ? null : boundedString(value, label, maximum);
+}
+
+function parseStorage(value) {
+  exactKeys(value, [
+    "resultsRoot", "collectionDir", "availableBytes", "minimumRequiredBytes",
+    "meetsMinimum", "mountPoint", "filesystemType", "source", "classification",
+    "supportsActiveState", "warning",
+  ], "reference discovery storage");
+  const resultsRoot = boundedString(value.resultsRoot,
+    "reference discovery storage.resultsRoot", 16 * 1024);
+  const collectionDir = boundedString(value.collectionDir,
+    "reference discovery storage.collectionDir", 16 * 1024);
+  if (!path.isAbsolute(resultsRoot) || !path.isAbsolute(collectionDir) ||
+      path.normalize(resultsRoot) !== resultsRoot || path.normalize(collectionDir) !== collectionDir ||
+      path.dirname(collectionDir) !== resultsRoot ||
+      !DISCOVERY_OUTPUT_NAME_RE.test(path.basename(collectionDir))) {
+    fail("reference discovery storage paths must bind one direct collection child");
+  }
+  const available = BigInt(uintString(value.availableBytes,
+    "reference discovery storage available bytes"));
+  const minimum = BigInt(uintString(value.minimumRequiredBytes,
+    "reference discovery storage minimum bytes"));
+  if (minimum !== REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES ||
+      typeof value.meetsMinimum !== "boolean" ||
+      value.meetsMinimum !== (available >= minimum)) {
+    fail("reference discovery storage capacity observation is inconsistent");
+  }
+  const mountPoint = optionalBoundedString(value.mountPoint,
+    "reference discovery storage mount point", 16 * 1024);
+  const filesystemType = optionalBoundedString(value.filesystemType,
+    "reference discovery storage filesystem type", 256);
+  const source = optionalBoundedString(value.source,
+    "reference discovery storage source", 16 * 1024);
+  const warning = optionalBoundedString(value.warning,
+    "reference discovery storage warning", 4096);
+  if (mountPoint !== null && !path.isAbsolute(mountPoint)) {
+    fail("reference discovery storage mount point must be absolute");
+  }
+  if (filesystemType !== null && !/^[a-z0-9][a-z0-9._+-]{0,63}$/.test(filesystemType)) {
+    fail("reference discovery storage filesystem type is invalid");
+  }
+  const expectedClassification = filesystemType !== null &&
+      VOLATILE_FILESYSTEMS.has(filesystemType)
+    ? "volatile-or-live-layer"
+    : source !== null && EPHEMERAL_BLOCK_SOURCE_RE.test(source)
+      ? "unknown"
+    : source?.startsWith("/dev/") || mountPoint?.startsWith("/media/") ||
+        mountPoint?.startsWith("/mnt/")
+      ? "likely-persistent"
+      : "unknown";
+  if (!PERSISTENCE_CLASSES.has(value.classification) ||
+      value.classification !== expectedClassification ||
+      typeof value.supportsActiveState !== "boolean" ||
+      value.supportsActiveState !==
+        (filesystemType !== null && !NON_UNIX_FILESYSTEMS.has(filesystemType)) ||
+      warning !== STORAGE_WARNINGS[value.classification]) {
+    fail("reference discovery storage classification is inconsistent");
+  }
+  return deepFreeze({
+    resultsRoot,
+    collectionDir,
+    availableBytes: available.toString(),
+    minimumRequiredBytes: minimum.toString(),
+    meetsMinimum: value.meetsMinimum,
+    mountPoint,
+    filesystemType,
+    source,
+    classification: value.classification,
+    supportsActiveState: value.supportsActiveState,
+    warning,
   });
 }
 
@@ -457,6 +556,7 @@ export function buildReferenceDiscoveryPlan(topologyValue, {
   identity,
   host,
   resources,
+  storage,
 } = {}) {
   const topology = parseReferenceDiscoveryTopology(topologyValue);
   const automatic = targetCpus === undefined && loadCpus === undefined;
@@ -489,6 +589,7 @@ export function buildReferenceDiscoveryPlan(topologyValue, {
     identity,
     host,
     resources,
+    storage,
     topology,
     selection,
     schedule: {
@@ -502,7 +603,7 @@ export function buildReferenceDiscoveryPlan(topologyValue, {
 export function parseReferenceDiscoveryPlan(value) {
   exactKeys(value, [
     "version", "protocol", "interpretationVersion", "profile", "identity", "host",
-    "resources", "topology", "selection", "schedule",
+    "resources", "storage", "topology", "selection", "schedule",
   ], "reference discovery plan");
   if (value.version !== REFERENCE_DISCOVERY_PLAN_VERSION ||
       value.protocol !== REFERENCE_DISCOVERY_PROTOCOL ||
@@ -514,6 +615,7 @@ export function parseReferenceDiscoveryPlan(value) {
   const topology = parseReferenceDiscoveryTopology(value.topology);
   const host = parseHost(value.host, topology.usableCpus);
   const resources = parseResources(value.resources);
+  const storage = parseStorage(value.storage);
   const selection = parsePlanSelection(value.selection, topology);
   exactKeys(value.schedule, [
     "targetOrderAlgorithm", "controllerOrderAlgorithm", "sessions",
@@ -544,6 +646,7 @@ export function parseReferenceDiscoveryPlan(value) {
     identity,
     host,
     resources,
+    storage,
     topology,
     selection,
     schedule: {
@@ -563,6 +666,34 @@ export function referenceDiscoveryPlanBinding(plan) {
   return deepFreeze({
     sha256: createHash("sha256").update(bytes).digest("hex"),
     bytes: bytes.length.toString(),
+  });
+}
+
+export function referenceDiscoveryPreviewBinding(planValue) {
+  const plan = parseReferenceDiscoveryPlan(planValue);
+  const preview = {
+    version: plan.version,
+    protocol: plan.protocol,
+    interpretationVersion: plan.interpretationVersion,
+    profile: plan.profile,
+    identity: plan.identity,
+    host: plan.host,
+    topology: plan.topology,
+    selection: plan.selection,
+    schedule: plan.schedule,
+    storage: {
+      resultsRoot: plan.storage.resultsRoot,
+      collectionDir: plan.storage.collectionDir,
+      mountPoint: plan.storage.mountPoint,
+      filesystemType: plan.storage.filesystemType,
+      source: plan.storage.source,
+      classification: plan.storage.classification,
+      supportsActiveState: plan.storage.supportsActiveState,
+    },
+  };
+  return deepFreeze({
+    algorithm: "reference-discovery-preview-canonical-json-sha256-v1",
+    sha256: createHash("sha256").update(canonicalProtocolJson(preview)).digest("hex"),
   });
 }
 

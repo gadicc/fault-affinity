@@ -384,7 +384,7 @@ export function resolveKitLayout(kitRoot = KIT_ROOT) {
   });
 }
 
-function collectIdentity(layout) {
+export function collectReferenceKitIdentity(layout) {
   const release = JSON.parse(readFileSync(layout.releaseFile, "utf8"));
   validateReleaseDeclaration(release);
   const controller = executableIdentity(layout.controllerNode, ["--version"], release.runtimes.controller);
@@ -786,7 +786,7 @@ export async function executeReference(options, dependencies = {}) {
     allowedCpus: (dependencies.readAllowedCpus ?? schedulableCpuSet)(),
   });
   const layout = (dependencies.resolveLayout ?? resolveKitLayout)();
-  const identity = (dependencies.collectIdentity ?? collectIdentity)(layout);
+  const identity = (dependencies.collectIdentity ?? collectReferenceKitIdentity)(layout);
   const destination = outputRoot(options, dependencies);
   const machine = (dependencies.collectMachineMetadata ?? collectMachineMetadata)({
     controllerCpu: topology.controllerCpu, targetCpu: options.targetCpu, loadCpus: options.loadCpus,

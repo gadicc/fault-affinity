@@ -24,6 +24,7 @@ import { resolveWorkloadSpec } from "../workload-spec.mjs";
 import {
   REFERENCE_DISCOVERY_MAX_TARGETS,
   REFERENCE_DISCOVERY_MINIMUM_HEADROOM_BYTES,
+  REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES,
   REFERENCE_DISCOVERY_PROFILE,
   buildReferenceDiscoveryPlan,
   buildReferenceDiscoveryReport,
@@ -34,6 +35,7 @@ import {
   parseReferenceDiscoveryTopology,
   readReferenceDiscoveryChild,
   referenceDiscoveryConfirmationSourceBinding,
+  referenceDiscoveryPreviewBinding,
   referenceDiscoveryWorstCaseMs,
 } from "../../src/reference-kit/discovery-protocol.mjs";
 import {
@@ -115,16 +117,36 @@ function host(topology = hybridTopology()) {
 }
 
 function resources({ available = 4n * 1024n ** 3n, current = 1024n ** 3n,
-  maximum = 8n * 1024n ** 3n } = {}) {
-  const cgroupHeadroom = maximum === null ? available : maximum - current;
+  maximum = 8n * 1024n ** 3n,
+  status = maximum === null ? "resolved-unlimited" : "resolved-limited" } = {}) {
+  const cgroupHeadroom = status === "resolved-limited"
+    ? maximum > current ? maximum - current : 0n
+    : status === "resolved-unlimited" ? available : 0n;
   const effective = available < cgroupHeadroom ? available : cgroupHeadroom;
   return {
     memAvailableBytes: available.toString(),
-    cgroupCurrentBytes: current?.toString() ?? null,
-    cgroupMaxBytes: maximum?.toString() ?? null,
+    cgroupStatus: status,
+    cgroupCurrentBytes: status === "resolved-limited" ? current.toString() : null,
+    cgroupMaxBytes: status === "resolved-limited" ? maximum.toString() : null,
     effectiveHeadroomBytes: effective.toString(),
     minimumHeadroomBytes: REFERENCE_DISCOVERY_MINIMUM_HEADROOM_BYTES.toString(),
     meetsMinimum: effective >= REFERENCE_DISCOVERY_MINIMUM_HEADROOM_BYTES,
+  };
+}
+
+function storage(root = "/var/lib/fault-affinity") {
+  return {
+    resultsRoot: root,
+    collectionDir: `${root}/reference-discovery-20260913T000000Z`,
+    availableBytes: (8n * 1024n ** 3n).toString(),
+    minimumRequiredBytes: REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES.toString(),
+    meetsMinimum: true,
+    mountPoint: "/var",
+    filesystemType: "ext4",
+    source: "/dev/vda2",
+    classification: "likely-persistent",
+    supportsActiveState: true,
+    warning: null,
   };
 }
 
@@ -133,6 +155,7 @@ function plan(topology = hybridTopology(), options = {}) {
     identity: identity(),
     host: host(topology),
     resources: resources(),
+    storage: storage(),
     ...options,
   });
 }
@@ -503,13 +526,69 @@ test("identity and resource bindings reject runtime substitution and inconsisten
   const unlimited = plan(hybridTopology(), {
     resources: resources({ current: 1024n, maximum: null }),
   });
-  assert.equal(unlimited.resources.cgroupCurrentBytes, "1024");
+  assert.equal(unlimited.resources.cgroupStatus, "resolved-unlimited");
+  assert.equal(unlimited.resources.cgroupCurrentBytes, null);
   assert.equal(unlimited.resources.cgroupMaxBytes, null);
+
+  const unavailable = plan(hybridTopology(), {
+    resources: resources({ status: "unavailable" }),
+  });
+  assert.equal(unavailable.resources.effectiveHeadroomBytes, "0");
+  assert.equal(unavailable.resources.meetsMinimum, false);
 
   const inconsistent = resources();
   inconsistent.effectiveHeadroomBytes = "1";
   assert.throws(() => plan(hybridTopology(), { resources: inconsistent }),
     /headroom is inconsistent/);
+
+  const fat = storage();
+  fat.filesystemType = "vfat";
+  fat.supportsActiveState = false;
+  assert.equal(plan(hybridTopology(), { storage: fat }).storage.supportsActiveState, false);
+  fat.supportsActiveState = true;
+  assert.throws(() => plan(hybridTopology(), { storage: fat }),
+    /storage classification is inconsistent/);
+
+  const forgedPersistent = storage();
+  forgedPersistent.mountPoint = "/home/ubuntu";
+  forgedPersistent.source = "overlay";
+  assert.throws(() => plan(hybridTopology(), { storage: forgedPersistent }),
+    /storage classification is inconsistent/);
+
+  const loopBacked = storage();
+  loopBacked.source = "/dev/loop7";
+  loopBacked.classification = "unknown";
+  loopBacked.warning = "WARNING: results storage persistence could not be established. Confirm this path is on mounted persistent media before running.";
+  assert.equal(plan(hybridTopology(), { storage: loopBacked }).storage.classification,
+    "unknown");
+
+  const unknownType = storage();
+  unknownType.filesystemType = null;
+  unknownType.mountPoint = "/home/ubuntu";
+  unknownType.source = null;
+  unknownType.classification = "unknown";
+  unknownType.supportsActiveState = false;
+  unknownType.warning = "WARNING: results storage persistence could not be established. Confirm this path is on mounted persistent media before running.";
+  assert.equal(plan(hybridTopology(), { storage: unknownType }).storage.supportsActiveState, false);
+});
+
+test("preview binding fixes identities, topology, roles, controllers, and storage location", () => {
+  const original = plan();
+  const sameSelectionWithNewCapacity = plan(hybridTopology(), {
+    resources: resources({ available: 3n * 1024n ** 3n }),
+    storage: { ...storage(), availableBytes: (7n * 1024n ** 3n).toString() },
+  });
+  assert.deepEqual(referenceDiscoveryPreviewBinding(original),
+    referenceDiscoveryPreviewBinding(sameSelectionWithNewCapacity));
+
+  const changedRoles = plan(hybridTopology(), { targetCpus: [4, 5], loadCpus: [0, 1] });
+  assert.notDeepEqual(referenceDiscoveryPreviewBinding(original),
+    referenceDiscoveryPreviewBinding(changedRoles));
+  const changedDestination = plan(hybridTopology(), {
+    storage: storage("/mnt/other-results"),
+  });
+  assert.notDeepEqual(referenceDiscoveryPreviewBinding(original),
+    referenceDiscoveryPreviewBinding(changedDestination));
 });
 
 test("history is plan-ordered, boot-bound, bounded, and contamination is permanent", () => {
