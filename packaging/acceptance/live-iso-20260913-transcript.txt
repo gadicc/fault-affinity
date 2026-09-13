@@ -1,0 +1,30 @@
+Privacy-minimized acceptance excerpt from serial.log
+
+ACCEPTANCE.txt: OK
+acceptance-vm.sh: OK
+safe-extract.py: OK
+fault-affinity-live-linux-x64.tar.gz: OK
+fault-affinity-sbom.spdx.json: OK
+v24.21.0
+v25.2.1
+
+Fault Affinity guided reference screen — dry run
+
+Mode: explicit CPU roles
+Target order: 3
+Fixed load CPUs: 0, 1
+Measured concurrency: 1 PGlite process at a time
+Schedule: 3 attempts in each A1 / B / A2 leg per target
+Worst-case bound: 19 minutes
+Results: /mnt/fault-affinity-results/reference-discovery-20260913T163442Z
+Observed memory headroom: 2745888768 bytes
+
+Planned sessions:
+  target 3 (controller 2)
+
+Nothing was executed and no result directory was created.
+
+FAULT_AFFINITY_VM_RELEASE=0.1.0-dev.297058c4e05b
+FAULT_AFFINITY_VM_COMMIT=297058c4e05b7e86c66fc3bacfeba01b3a64a47e
+FAULT_AFFINITY_VM_ACCEPTANCE_OK
+FAULT_AFFINITY_VM_STATUS=0
