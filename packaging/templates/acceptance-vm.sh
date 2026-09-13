@@ -64,17 +64,33 @@ kit_dir="$extract_dir/fault-affinity"
 "$kit_dir/bin/run-reference" --help
 "$kit_dir/share/prepare-results" --help
 
-before_inventory=$(find "$results_dir" -xdev -mindepth 1 \
-  -printf '%P\t%y\t%s\n' | LC_ALL=C sort | sha256sum)
-plan=$("$kit_dir/bin/discover-reference" \
-  --results-root "$results_dir" \
-  --target-cpus 3 \
-  --load-cpus 0-1 \
-  --dry-run 2>&1)
+inventory_file="$extract_dir/results-inventory.raw"
+sorted_inventory_file="$extract_dir/results-inventory.sorted"
+inventory_results() {
+  sudo /usr/bin/find "$results_dir" -xdev -mindepth 1 \
+    -printf '%P\t%y\t%s\n' > "$inventory_file" ||
+    fail "cannot inventory the temporary results volume"
+  LC_ALL=C sort "$inventory_file" > "$sorted_inventory_file" ||
+    fail "cannot sort the temporary results inventory"
+  /usr/bin/sha256sum "$sorted_inventory_file"
+}
+
+before_inventory=$(inventory_results)
+if plan=$("$kit_dir/bin/discover-reference" \
+    --results-root "$results_dir" \
+    --target-cpus 3 \
+    --load-cpus 0-1 \
+    --dry-run 2>&1)
+then
+  :
+else
+  status=$?
+  printf '%s\n' "$plan" >&2
+  exit "$status"
+fi
 printf '%s\n' "$plan"
 printf '%s\n' "$plan" | grep -F "Fault Affinity guided reference screen" >/dev/null
-after_inventory=$(find "$results_dir" -xdev -mindepth 1 \
-  -printf '%P\t%y\t%s\n' | LC_ALL=C sort | sha256sum)
+after_inventory=$(inventory_results)
 [ "$before_inventory" = "$after_inventory" ] ||
   fail "dry run created content on the results volume"
 

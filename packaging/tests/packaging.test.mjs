@@ -33,6 +33,7 @@ import { validateRecoveryRunProvenance } from "../validate-recovery-run.mjs";
 import {
   buildGuestStartCommand,
   buildQemuArguments,
+  buildQemuLaunch,
   parseLiveIsoAcceptanceArguments,
 } from "../live-iso-acceptance.mjs";
 import {
@@ -565,6 +566,10 @@ test("dev snapshot support is self-contained and remains harmless", () => {
   assert.match(guest, /sha256sum --check SHA256SUMS/);
   assert.match(guest, /safe-extract\.py/);
   assert.match(guest, /before_inventory[\s\S]+after_inventory/);
+  assert.equal(guest.match(/sudo \/usr\/bin\/find/g)?.length, 1);
+  assert.match(guest, /find[\s\S]+> "\$inventory_file" \|\|/);
+  assert.match(guest, /sort "\$inventory_file" > "\$sorted_inventory_file" \|\|/);
+  assert.match(guest, /if plan=\$\([\s\S]+else[\s\S]+printf '%s\\n' "\$plan" >&2/);
   assert.match(guest, /--dry-run/);
   assert.doesNotMatch(guest, /--yes|child\.mjs|yes-load|PGlite/);
 
@@ -622,6 +627,17 @@ test("live ISO acceptance builds a serial-only QEMU dry-run boundary", () => {
     argument.includes("readonly=on")));
   assert.ok(qemu.some((argument) => argument.includes("results.ext4") &&
     argument.includes("if=virtio")));
+  const launch = buildQemuLaunch(qemu);
+  assert.equal(launch.program, "prlimit");
+  assert.deepEqual(launch.arguments.slice(0, 4), [
+    "--memlock=0:0",
+    "--",
+    "qemu-system-x86_64",
+    "-name",
+  ]);
+  assert.deepEqual(launch.arguments.slice(3), qemu);
+  assert.throws(() => buildQemuLaunch(["-m", 4096]),
+    /QEMU arguments must be an array of strings/);
   const guestStart = buildGuestStartCommand();
   assert.match(guestStart, /trap .*FAULT_AFFINITY_VM_STATUS/);
   assert.doesNotMatch(guestStart, /trap - EXIT|--yes|child\.mjs|yes-load|PGlite/);

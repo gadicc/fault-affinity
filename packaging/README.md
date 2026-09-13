@@ -104,8 +104,8 @@ bundled runtime versions, launcher help, result-preparer help, and a four-CPU
 dry run that creates no result content. It never supplies live confirmation or
 starts PGlite, WebAssembly churn, or load workers.
 
-Install QEMU, xorriso, and e2fsprogs on the Linux host, then run from the
-repository root with a new output path:
+Install QEMU, xorriso, e2fsprogs, and util-linux (`prlimit`) on the Linux host,
+then run from the repository root with a new output path:
 
 ```sh
 npm run acceptance:live-iso -- \
@@ -117,6 +117,9 @@ npm run acceptance:live-iso -- \
 The runner verifies the ISO against `live-iso-lock.json`. It uses KVM when
 available and otherwise falls back to slower TCG emulation. A successful run
 writes `acceptance.json` and the complete `serial.log` to the output directory.
+It gives only the QEMU child process a zero memlock limit. This selects QEMU's
+supported epoll fallback instead of consuming the account-wide locked-memory
+budget while setting up `io_uring`; it does not change the shell or host limit.
 The direct serial boot exercises the exact kernel, initrd, and live filesystem,
 but intentionally skips GRUB, GNOME, Firefox, physical USB behavior, and a
 confirmed diagnostic run.
