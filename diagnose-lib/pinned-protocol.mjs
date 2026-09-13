@@ -92,6 +92,10 @@ const LOADED_DISCOVERY_STATE_FILE_MAX_BYTES = Object.freeze({
 });
 const REFERENCE_DISCOVERY_STATE_FILE_MAX_BYTES = Object.freeze({
   "reference-discovery-plan.json": 1024 * 1024,
+  "reference-discovery-coordination.json": 16 * 1024,
+  "reference-discovery-report.json": 16 * 1024 * 1024,
+  "reference-discovery-report.md": 1024 * 1024,
+  "reference-discovery-report.complete": 4 * 1024,
 });
 const REFERENCE_DISCOVERY_HISTORY_STATE_FILE_RE =
   /^reference-discovery-history-[0-9]{5}-(?:start|terminal)\.json$/;
@@ -533,7 +537,7 @@ function fsyncDirectory(directory) {
 // The exact-CPU store reuses this proven no-clobber adapter in its own private
 // directory; legacy protocol readers still select only their own final names.
 const STATE_COMMIT_TEMP_RE =
-  /^\.(isolated-[0-9]{9}\.json|concurrent-[0-9]{9}-[a-z][a-z0-9_-]{0,63}\.json|exact-cpu-phase\.json|exact-cpu-attempt-[0-9]{9}\.json|baseline-phase\.json|baseline-wave-[0-9]{9}\.json|group-phase\.json|group-wave-[0-9]{9}\.json|pinned-concurrent-phase\.json|pinned-concurrent-wave-[0-9]{9}\.json|controlled-load-phase\.json|controlled-load-session\.json|debugger-phase\.json|debugger-attempt-[0-9]{9}-(?:envelope\.json|transcript|control)|fault-affinity-bundle\.json|loaded-discovery\.json|loaded-discovery-report\.(?:json|md)|reference-discovery-plan\.json|reference-discovery-history-[0-9]{5}-(?:start|terminal)\.json)\.([1-9][0-9]*)\.([a-f0-9]{16})\.(writing|ready)\.tmp$/;
+  /^\.(isolated-[0-9]{9}\.json|concurrent-[0-9]{9}-[a-z][a-z0-9_-]{0,63}\.json|exact-cpu-phase\.json|exact-cpu-attempt-[0-9]{9}\.json|baseline-phase\.json|baseline-wave-[0-9]{9}\.json|group-phase\.json|group-wave-[0-9]{9}\.json|pinned-concurrent-phase\.json|pinned-concurrent-wave-[0-9]{9}\.json|controlled-load-phase\.json|controlled-load-session\.json|debugger-phase\.json|debugger-attempt-[0-9]{9}-(?:envelope\.json|transcript|control)|fault-affinity-bundle\.json|loaded-discovery\.json|loaded-discovery-report\.(?:json|md)|reference-discovery-(?:plan|coordination)\.json|reference-discovery-report\.(?:json|md|complete)|reference-discovery-history-[0-9]{5}-(?:start|terminal)\.json)\.([1-9][0-9]*)\.([a-f0-9]{16})\.(writing|ready)\.tmp$/;
 
 function processIsLive(pidText) {
   const pid = Number(pidText);
@@ -566,6 +570,8 @@ function recoverInterruptedStateCommits(directory) {
         !name.startsWith(".debugger-") &&
         !name.startsWith(".loaded-discovery") &&
         !name.startsWith(".reference-discovery-plan.json.") &&
+        !name.startsWith(".reference-discovery-coordination.json.") &&
+        !name.startsWith(".reference-discovery-report.") &&
         !name.startsWith(".reference-discovery-history-") &&
         !name.startsWith(".fault-affinity-bundle.json.")) continue;
     const match = name.match(STATE_COMMIT_TEMP_RE);

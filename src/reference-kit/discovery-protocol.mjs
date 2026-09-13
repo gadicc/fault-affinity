@@ -712,7 +712,7 @@ function parseHistoryRecord(value, index) {
   if (value.type === "start") {
     exactKeys(value, [
       "version", "type", "generation", "sessionOrdinal", "targetCpu",
-      "bootIdSha256", "unixMs",
+      "bootIdSha256", "unixMs", "coordinatorPid", "coordinatorStartTicks",
     ], label);
   } else if (value.type === "terminal") {
     exactKeys(value, [
@@ -733,6 +733,10 @@ function parseHistoryRecord(value, index) {
   integer(value.targetCpu, `${label}.targetCpu`, 0, MAX_CPU_ID);
   digest(value.bootIdSha256, `${label}.bootIdSha256`);
   integer(value.unixMs, `${label}.unixMs`, 0, Number.MAX_SAFE_INTEGER);
+  if (value.type === "start") {
+    integer(value.coordinatorPid, `${label}.coordinatorPid`, 1, 2_147_483_647);
+    uintString(value.coordinatorStartTicks, `${label}.coordinatorStartTicks`);
+  }
   if (value.type === "terminal") {
     const controllerAffinityValid =
       (value.controllerCpu === null && value.controllerAllowedCpuList === null) ||
@@ -901,7 +905,7 @@ export async function readReferenceDiscoveryChild({
   verifyWorkloadProvenance(resolved);
   verifyWorkloadProvenance(auxiliary);
   if (typeof bundleDir !== "string" || !path.isAbsolute(bundleDir) ||
-      path.basename(path.normalize(bundleDir)) !== session.directory) {
+      path.normalize(bundleDir) !== path.join(plan.storage.collectionDir, session.directory)) {
     fail("reference discovery child directory does not match the planned session");
   }
   const bundle = await readSchema3Bundle({
@@ -994,8 +998,13 @@ export function buildReferenceDiscoveryReport(planValue, children, historyValue)
   const rows = children.map((child, index) =>
     parseReportChild(plan, child, plan.schedule.sessions[index], index));
   const committed = new Set(history.committedSessionOrdinals);
+  const terminated = new Set(history.generations
+    .filter((generation) => generation.terminal !== null)
+    .map((generation) => generation.start.sessionOrdinal));
   for (const session of plan.schedule.sessions) {
-    if (rows[session.ordinal - 1].complete !== committed.has(session.ordinal)) {
+    const row = rows[session.ordinal - 1];
+    if ((committed.has(session.ordinal) && !row.complete) ||
+        (row.complete && !committed.has(session.ordinal) && !terminated.has(session.ordinal))) {
       fail(`reference discovery child for CPU ${session.targetCpu} disagrees with execution history`);
     }
   }
@@ -1021,6 +1030,16 @@ export function buildReferenceDiscoveryReport(planValue, children, historyValue)
       history: referenceDiscoveryHistoryBinding(history.records),
       historyContaminated: history.contaminated,
       historyGenerations: history.generations.length,
+      historyFailures: history.generations
+        .filter((generation) => generation.terminal === null || !generation.terminal.committed)
+        .map((generation) => ({
+          generation: generation.start.generation,
+          sessionOrdinal: generation.start.sessionOrdinal,
+          cpu: generation.start.targetCpu,
+          reason: generation.terminal?.reason ?? "open-generation",
+          stage: generation.terminal?.stage ?? null,
+          errorCode: generation.terminal?.errorCode ?? null,
+        })),
       children: rows.map((row) => ({ cpu: row.cpu, ...row.binding })),
     },
     targetCpus: [...plan.selection.targetCpus],
@@ -1045,6 +1064,52 @@ export function canonicalReferenceDiscoveryReportLine(report) {
     fail("reference discovery report was not derived from authoritative inputs");
   }
   return Buffer.from(`${canonicalProtocolJson(report)}\n`, "utf8");
+}
+
+export function renderReferenceDiscoveryReportMarkdown(report) {
+  if (!GENERATED_REPORTS.has(report)) {
+    fail("reference discovery report was not derived from authoritative inputs");
+  }
+  const candidate = report.highestObservedFaultRateCandidate === null
+    ? "None"
+    : `CPU ${report.highestObservedFaultRateCandidate}`;
+  const outcomeCounts = (leg) =>
+    `${leg.target}/${leg.pass}/${leg.other}/${leg.invalid}`;
+  const guidance = report.source.historyContaminated
+    ? "This collection cannot select a confirmation CPU because an execution was interrupted or failed. Start a new complete screen for candidate selection."
+    : !report.complete
+      ? "This screen is incomplete. Resume it on the same boot and machine to finish untouched targets."
+      : !report.selectionEligible
+        ? "This collection cannot select a confirmation CPU because one or more rows contain unusable outcomes. Start a new complete screen after resolving the cause."
+        : null;
+  const lines = [
+    "# Fault Affinity guided reference screen",
+    "",
+    `- Status: ${report.status}`,
+    `- Selection eligible: ${report.selectionEligible ? "yes" : "no"}`,
+    `- Highest observed fault-rate candidate: ${candidate}`,
+    ...(report.source.historyFailures.length === 0 ? [] : [
+      `- Execution exclusions: ${report.source.historyFailures.map((failure) =>
+        `generation ${failure.generation}, CPU ${failure.cpu}: ${failure.reason}` +
+        `${failure.errorCode === null ? "" : ` (${failure.errorCode})`}`).join("; ")}`,
+    ]),
+    "",
+    "Counts are target / pass / other / invalid.",
+    "",
+    "| CPU | Complete | Eligible | A1 | B | A2 |",
+    "| ---: | :---: | :---: | ---: | ---: | ---: |",
+    ...report.rows.map((row) =>
+      `| ${row.cpu} | ${row.complete ? "yes" : "no"} | ${row.eligible ? "yes" : "no"} | ` +
+      `${outcomeCounts(row.withoutLoad)} | ${outcomeCounts(row.withLoad)} | ` +
+      `${outcomeCounts(row.afterRecovery)} |`),
+    ...(guidance === null ? [] : ["", guidance]),
+    "",
+    report.interpretation.claim,
+    "",
+    report.interpretation.boundary,
+    "",
+  ];
+  return Buffer.from(lines.join("\n"), "utf8");
 }
 
 export function referenceDiscoveryConfirmationSourceBinding(planValue, reportValue) {

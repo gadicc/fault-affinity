@@ -666,13 +666,8 @@ export function planReferenceDiscovery({
   }
 }
 
-export function revalidateReferenceDiscoveryExecution(planValue, dependencies = {}) {
+export function revalidateReferenceDiscoveryContext(planValue, dependencies = {}) {
   const plan = parseReferenceDiscoveryPlan(planValue);
-  if (!plan.resources.meetsMinimum || !plan.storage.meetsMinimum ||
-      !plan.storage.supportsActiveState || plan.storage.classification !== "likely-persistent") {
-    fail("reference discovery preview did not pass live resource and storage admission",
-      "REFERENCE_DISCOVERY_ADMISSION_REFUSED");
-  }
   validateReferenceHost(dependencies.host);
   const ambient = dependencies.environment ?? process.env;
   assertSafeAmbientEnvironment(ambient);
@@ -706,34 +701,6 @@ export function revalidateReferenceDiscoveryExecution(planValue, dependencies = 
       workloads,
       releaseFileAfter,
     );
-    const resources = (dependencies.collectResources ?? collectReferenceDiscoveryResources)(
-      dependencies,
-    );
-    if (!resources.meetsMinimum) {
-      fail("reference discovery memory headroom fell below the live minimum",
-        "REFERENCE_DISCOVERY_RESOURCE_LOW");
-    }
-    const observedStorage = (dependencies.inspectStorage ?? inspectOutputStorage)(
-      plan.storage.collectionDir,
-    );
-    const currentStorage = normalizeReferenceDiscoveryStorageObservation(observedStorage);
-    if (currentStorage.available < REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES) {
-      fail("reference discovery storage fell below the live minimum",
-        "REFERENCE_DISCOVERY_STORAGE_LOW");
-    }
-    const stableStorage = {
-      mountPoint: observedStorage.mountPoint,
-      filesystemType: observedStorage.filesystemType,
-      source: observedStorage.source,
-      classification: currentStorage.classification,
-      supportsActiveState: currentStorage.supportsActiveState,
-    };
-    const plannedStorage = Object.fromEntries(Object.keys(stableStorage)
-      .map((key) => [key, plan.storage[key]]));
-    if (canonicalProtocolJson(stableStorage) !== canonicalProtocolJson(plannedStorage)) {
-      fail("reference discovery results storage changed after preview",
-        "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
-    }
     for (const [label, current, expected] of [
       ["CPU topology", topology, plan.topology],
       ["host identity", host, plan.host],
@@ -744,13 +711,52 @@ export function revalidateReferenceDiscoveryExecution(planValue, dependencies = 
           "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
       }
     }
-    return Object.freeze({ plan, layout, launchEnvironment, workloads, resources, storage: {
-      ...stableStorage,
-      availableBytes: currentStorage.available.toString(),
-    } });
+    return Object.freeze({ plan, layout, launchEnvironment, workloads });
   } finally {
     bindingKey.fill(0);
   }
+}
+
+export function revalidateReferenceDiscoveryExecution(planValue, dependencies = {}) {
+  const plan = parseReferenceDiscoveryPlan(planValue);
+  if (!plan.resources.meetsMinimum || !plan.storage.meetsMinimum ||
+      !plan.storage.supportsActiveState || plan.storage.classification !== "likely-persistent") {
+    fail("reference discovery preview did not pass live resource and storage admission",
+      "REFERENCE_DISCOVERY_ADMISSION_REFUSED");
+  }
+  const context = revalidateReferenceDiscoveryContext(plan, dependencies);
+  const resources = (dependencies.collectResources ?? collectReferenceDiscoveryResources)(
+    dependencies,
+  );
+  if (!resources.meetsMinimum) {
+    fail("reference discovery memory headroom fell below the live minimum",
+      "REFERENCE_DISCOVERY_RESOURCE_LOW");
+  }
+  const observedStorage = (dependencies.inspectStorage ?? inspectOutputStorage)(
+    plan.storage.collectionDir,
+  );
+  const currentStorage = normalizeReferenceDiscoveryStorageObservation(observedStorage);
+  if (currentStorage.available < REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES) {
+    fail("reference discovery storage fell below the live minimum",
+      "REFERENCE_DISCOVERY_STORAGE_LOW");
+  }
+  const stableStorage = {
+    mountPoint: observedStorage.mountPoint,
+    filesystemType: observedStorage.filesystemType,
+    source: observedStorage.source,
+    classification: currentStorage.classification,
+    supportsActiveState: currentStorage.supportsActiveState,
+  };
+  const plannedStorage = Object.fromEntries(Object.keys(stableStorage)
+    .map((key) => [key, plan.storage[key]]));
+  if (canonicalProtocolJson(stableStorage) !== canonicalProtocolJson(plannedStorage)) {
+    fail("reference discovery results storage changed after preview",
+      "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
+  }
+  return Object.freeze({ ...context, resources, storage: {
+    ...stableStorage,
+    availableBytes: currentStorage.available.toString(),
+  } });
 }
 
 export function revalidateReferenceDiscoveryOwnerExecution(planValue, dependencies = {}) {

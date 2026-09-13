@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { fstatSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,6 +35,33 @@ export class ReferenceDiscoverySessionProcessError extends Error {
 
 function fail(message, code) {
   throw new ReferenceDiscoverySessionProcessError(message, code);
+}
+
+function validateRetainedDirectory(value, label) {
+  const keys = value !== null && typeof value === "object" && !Array.isArray(value)
+    ? Object.keys(value).sort() : [];
+  if (keys.join("\n") !== ["device", "fd", "inode"].sort().join("\n") ||
+      !Number.isSafeInteger(value.fd) || value.fd < 0 ||
+      !/^(0|[1-9][0-9]*)$/.test(value.device) ||
+      !/^(0|[1-9][0-9]*)$/.test(value.inode)) {
+    fail(`reference discovery ${label} retention is invalid`);
+  }
+  let stat;
+  try { stat = fstatSync(value.fd, { bigint: true }); } catch {
+    fail(`reference discovery ${label} retention descriptor is unavailable`);
+  }
+  if (!stat.isDirectory() || stat.dev.toString() !== value.device ||
+      stat.ino.toString() !== value.inode) {
+    fail(`reference discovery ${label} retention descriptor changed`);
+  }
+  return value;
+}
+
+function markReaped(error) {
+  const result = error instanceof Error ? error :
+    new ReferenceDiscoverySessionProcessError("reference discovery owner failed after exit");
+  result.reaped = true;
+  return result;
 }
 
 function parseOwnerRecord(chunks, expectedControllerCpu) {
@@ -100,6 +128,7 @@ function waitForChild(child, { signal, ownerShutdownGraceMs, deadlineMs, control
     const stderrState = { bytes: 0 };
     let settled = false;
     let outputError = null;
+    let childError = null;
     let killTimer = null;
     let deadlineTimer = null;
     const stopChild = () => {
@@ -136,10 +165,14 @@ function waitForChild(child, { signal, ownerShutdownGraceMs, deadlineMs, control
         outputError = error;
       }
     });
-    child.once("error", (error) => finish(reject, outputError ?? error));
+    child.once("error", (error) => { childError = error; });
     child.once("close", (code, childSignal) => {
       if (outputError !== null) {
-        finish(reject, outputError);
+        finish(reject, markReaped(outputError));
+        return;
+      }
+      if (childError !== null) {
+        finish(reject, markReaped(childError));
         return;
       }
       try {
@@ -152,9 +185,10 @@ function waitForChild(child, { signal, ownerShutdownGraceMs, deadlineMs, control
           code,
           signal: childSignal,
           stderr: Buffer.concat(stderr).toString("utf8"),
+          reaped: true,
         }));
       } catch (error) {
-        finish(reject, error);
+        finish(reject, markReaped(error));
       }
     });
     signal?.addEventListener("abort", stopChild, { once: true });
@@ -174,6 +208,8 @@ export async function runReferenceDiscoverySessionProcess({
   plan: planValue,
   sessionOrdinal,
   collectionDir,
+  retainedCoordinator,
+  retainedCollection,
   signal,
   environment = process.env,
   ownerPath = OWNER_PATH,
@@ -186,6 +222,8 @@ export async function runReferenceDiscoverySessionProcess({
       !path.isAbsolute(ownerPath) || ownerPath.includes("\0") || typeof spawnProcess !== "function") {
     fail("reference discovery session process options are invalid");
   }
+  const coordinatorRetention = validateRetainedDirectory(retainedCoordinator, "coordinator");
+  const collectionRetention = validateRetainedDirectory(retainedCollection, "collection");
   assertSafeAmbientEnvironment(environment);
   const launchEnvironment = reviewedLaunchEnvironment(environment);
   const child = spawnProcess(plan.identity.taskset.path, [
@@ -196,12 +234,22 @@ export async function runReferenceDiscoverySessionProcess({
     collectionDir,
     String(sessionOrdinal),
     referenceDiscoveryPlanBinding(plan).sha256,
+    collectionRetention.device,
+    collectionRetention.inode,
+    coordinatorRetention.device,
+    coordinatorRetention.inode,
   ], {
     cwd: "/",
     env: launchEnvironment,
     shell: false,
     windowsHide: true,
-    stdio: ["ignore", "ignore", "pipe", "pipe"],
+    // fd 4 keeps the campaign lease alive if the controller exits before the
+    // owner. The owner does not read it; close-on-exit is the handoff boundary.
+    stdio: [
+      "ignore", "ignore", "pipe", "pipe",
+      coordinatorRetention.fd,
+      collectionRetention.fd,
+    ],
   });
   const ownerShutdownGraceMs = Math.max(
     MINIMUM_OWNER_SHUTDOWN_GRACE_MS,

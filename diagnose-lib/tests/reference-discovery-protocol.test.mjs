@@ -37,6 +37,7 @@ import {
   referenceDiscoveryConfirmationSourceBinding,
   referenceDiscoveryPreviewBinding,
   referenceDiscoveryWorstCaseMs,
+  renderReferenceDiscoveryReportMarkdown,
 } from "../../src/reference-kit/discovery-protocol.mjs";
 import {
   publishReferenceDiscoveryHistoryStart,
@@ -44,7 +45,15 @@ import {
   readReferenceDiscoveryHistory,
   withReferenceDiscoveryHistoryStore,
 } from "../../src/reference-kit/discovery-history-store.mjs";
-import { canonicalProtocolJson } from "../pinned-protocol.mjs";
+import { canonicalProtocolJson, createFileStateAdapter } from "../pinned-protocol.mjs";
+import {
+  REFERENCE_DISCOVERY_REPORT_COMPLETION_FILE,
+  REFERENCE_DISCOVERY_REPORT_JSON_FILE,
+  REFERENCE_DISCOVERY_REPORT_MARKDOWN_FILE,
+  createReferenceDiscoveryCollection,
+  publishReferenceDiscoveryReport,
+  verifyReferenceDiscoveryReportPublication,
+} from "../../src/reference-kit/discovery-store.mjs";
 
 const HASHES = Object.freeze({
   boot: "a".repeat(64),
@@ -293,6 +302,7 @@ function createReportFixture(targetCount = 1) {
     targetCpus,
     loadCpus: [workerCpu],
     identity: fixtureIdentity,
+    storage: storage(root),
   });
   let bundleIndex = 0;
   return {
@@ -300,8 +310,7 @@ function createReportFixture(targetCount = 1) {
     plan: value,
     async child(session, legs = {}) {
       bundleIndex += 1;
-      const parent = path.join(root, `bundle-${bundleIndex}`);
-      const bundleDir = path.join(parent, session.directory);
+      const bundleDir = path.join(value.storage.collectionDir, session.directory);
       mkdirSync(bundleDir, { recursive: true, mode: 0o700 });
       const generation = bundleIndex.toString(16).padStart(32, "0");
       const controlledLoadManifest = buildControlledLoadSessionManifest(measured, auxiliary, {
@@ -383,6 +392,8 @@ function historyPair(session, generation, terminal = {}) {
     targetCpu: session.targetCpu,
     bootIdSha256: HASHES.boot,
     unixMs: 1_000 + generation * 10,
+    coordinatorPid: 1234,
+    coordinatorStartTicks: "5678",
   };
   return [start, {
     version: 1,
@@ -653,9 +664,43 @@ test("eligible reports rank only artifact-derived equal-denominator B legs", {
     assert.equal(report.rows.find((row) => row.cpu === value.schedule.sessions[1].targetCpu)
       .withoutLoad.target, 3);
     assert.ok(canonicalReferenceDiscoveryReportLine(report).length > 0);
+    assert.match(renderReferenceDiscoveryReportMarkdown(report).toString("utf8"),
+      /Highest observed fault-rate candidate/);
+    await createReferenceDiscoveryCollection(value);
+    await createFileStateAdapter(value.storage.collectionDir).commit(
+      REFERENCE_DISCOVERY_REPORT_JSON_FILE,
+      canonicalReferenceDiscoveryReportLine(report),
+    );
+    const published = await publishReferenceDiscoveryReport({
+      collectionDir: value.storage.collectionDir,
+      report,
+    });
+    assert.match(published.report.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(readFileSync(path.join(value.storage.collectionDir,
+      REFERENCE_DISCOVERY_REPORT_JSON_FILE))
+      .equals(canonicalReferenceDiscoveryReportLine(report)), true);
+    assert.equal(readFileSync(path.join(value.storage.collectionDir,
+      REFERENCE_DISCOVERY_REPORT_MARKDOWN_FILE))
+      .equals(renderReferenceDiscoveryReportMarkdown(report)), true);
+    assert.equal(readFileSync(path.join(value.storage.collectionDir,
+      REFERENCE_DISCOVERY_REPORT_COMPLETION_FILE)).at(-1), 0x0a);
+    assert.deepEqual(await publishReferenceDiscoveryReport({
+      collectionDir: value.storage.collectionDir,
+      report,
+    }), published);
+    assert.deepEqual(await verifyReferenceDiscoveryReportPublication({
+      collectionDir: value.storage.collectionDir,
+      report,
+    }), published);
     const source = referenceDiscoveryConfirmationSourceBinding(value, report);
     assert.equal(source.targetCpu, expected);
     assert.equal(source.bootIdSha256, HASHES.boot);
+    writeFileSync(path.join(value.storage.collectionDir,
+      REFERENCE_DISCOVERY_REPORT_MARKDOWN_FILE), "tampered\n", { mode: 0o600 });
+    await assert.rejects(verifyReferenceDiscoveryReportPublication({
+      collectionDir: value.storage.collectionDir,
+      report,
+    }), /does not match the authoritative report/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -688,6 +733,25 @@ test("all-pass and retried artifact-derived reports cannot fabricate a candidate
     const retried = buildReferenceDiscoveryReport(value, cleanChildren, retriedHistory);
     assert.equal(retried.status, "complete-ineligible");
     assert.equal(retried.source.historyContaminated, true);
+    const retriedMarkdown = renderReferenceDiscoveryReportMarkdown(retried).toString("utf8");
+    assert.match(retriedMarkdown, /Execution exclusions:.*operational-invalid/);
+    assert.match(retriedMarkdown, /Start a new complete screen/);
+
+    const committedBeforeControllerLoss = historyPair(session, 1, {
+      committed: false,
+      reason: "reconciled-interruption",
+      stage: null,
+      errorCode: "REFERENCE_DISCOVERY_RECONCILED_INTERRUPTION",
+      controllerCpu: null,
+      controllerAllowedCpuList: null,
+    });
+    const reconciled = buildReferenceDiscoveryReport(
+      value,
+      cleanChildren,
+      committedBeforeControllerLoss,
+    );
+    assert.equal(reconciled.status, "complete-ineligible");
+    assert.equal(reconciled.highestObservedFaultRateCandidate, null);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -704,12 +768,27 @@ test("other outcomes and incomplete artifact-derived children are selection-inel
     const unusable = buildReferenceDiscoveryReport(value, [unusableChild], completedHistory(value));
     assert.equal(unusable.status, "complete-ineligible");
     assert.equal(unusable.highestObservedFaultRateCandidate, null);
+    assert.match(renderReferenceDiscoveryReportMarkdown(unusable).toString("utf8"),
+      /0\/2\/1\/0/);
 
-    const incompleteChild = await fixture.child(session, { complete: false });
-    const incomplete = buildReferenceDiscoveryReport(value, [incompleteChild], []);
-    assert.equal(incomplete.status, "incomplete");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+
+  const incompleteFixture = createReportFixture();
+  try {
+    const incompleteChild = await incompleteFixture.child(
+      incompleteFixture.plan.schedule.sessions[0],
+      { complete: false },
+    );
+    const incomplete = buildReferenceDiscoveryReport(
+      incompleteFixture.plan,
+      [incompleteChild],
+      [],
+    );
+    assert.equal(incomplete.status, "incomplete");
+  } finally {
+    rmSync(incompleteFixture.root, { recursive: true, force: true });
   }
 });
 
