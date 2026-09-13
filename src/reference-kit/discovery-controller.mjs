@@ -607,7 +607,7 @@ export function collectReferenceDiscoveryStorage(resultsRoot, outputName, depend
   };
 }
 
-function normalizeReferenceDiscoveryStorageObservation(observed) {
+export function normalizeReferenceDiscoveryStorageObservation(observed) {
   if (typeof observed.availableBytes !== "string" ||
       !/^(0|[1-9][0-9]*)$/.test(observed.availableBytes) ||
       observed.availableBytes.length > 24) {

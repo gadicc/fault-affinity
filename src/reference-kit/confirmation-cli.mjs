@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { BUNDLE_EXECUTION_LEASE_BUSY_EXIT } from "../../diagnose-lib/bundle-execution-lease.mjs";
 import {
   executeReferenceProfile,
+  inspectOutputStorage,
   parseCpuList,
 } from "./controller.mjs";
 import {
@@ -16,6 +17,7 @@ import {
 import {
   REFERENCE_CONFIRMATION_PROFILE,
   collectReferenceDiscoveryResources,
+  normalizeReferenceDiscoveryStorageObservation,
   revalidateReferenceDiscoveryContext,
   revalidateReferenceDiscoveryOwnerExecution,
   resolveReferenceDiscoveryWorkloads,
@@ -209,6 +211,27 @@ function selectedSession(snapshot) {
   return { candidate, session };
 }
 
+function confirmationExecutionDependencies(dependencies) {
+  const executionDependencies = {
+    ...dependencies,
+    ...(dependencies.referenceExecutionDependencies ?? {}),
+  };
+  const inspectStorage = executionDependencies.inspectStorage ?? inspectOutputStorage;
+  return {
+    ...executionDependencies,
+    inspectStorage: (root) => {
+      const observed = inspectStorage(root);
+      const normalized = normalizeReferenceDiscoveryStorageObservation(observed);
+      return Object.freeze({
+        ...observed,
+        availableBytes: normalized.available.toString(),
+        classification: normalized.classification,
+        warning: normalized.warning,
+      });
+    },
+  };
+}
+
 function reexecConfirmation(options, controllerCpu, context, dependencies) {
   requireNotAborted(dependencies.signal);
   if (dependencies.reexecConfirmation !== undefined) {
@@ -307,10 +330,8 @@ async function executeFromSnapshot(options, snapshot, current, dependencies, coo
     },
   });
   requireNotAborted(dependencies.signal);
-  return (dependencies.executeProfile ?? executeReferenceProfile)(executionOptions, execution, {
-    ...dependencies,
-    ...(dependencies.referenceExecutionDependencies ?? {}),
-  });
+  return (dependencies.executeProfile ?? executeReferenceProfile)(executionOptions, execution,
+    confirmationExecutionDependencies(dependencies));
 }
 
 export async function executeReferenceConfirmation(options, dependencies = {}) {

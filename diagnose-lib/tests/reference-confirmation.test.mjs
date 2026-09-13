@@ -116,6 +116,55 @@ test("confirmation rederives one eligible candidate and builds a fresh bound pro
   assert.match(rendered, /'--yes'/);
 });
 
+test("confirmation applies discovery persistence policy to ephemeral block devices", async () => {
+  const value = snapshot();
+  for (const source of ["/dev/loop0", "/dev/ram0", "/dev/zram0"]) {
+    let admittedStorage;
+    const result = await executeReferenceConfirmation(parseReferenceConfirmationArgs([
+      "--from-discovery", value.plan.storage.collectionDir,
+      "--output-name", "reference-confirmation-20260913T200004Z-storage",
+    ]), {
+      deriveReport: async () => value,
+      readCurrentAllowedCpus: () => [0, 1, 6, 7],
+      revalidateContext: async () => ({}),
+      buildSourceBinding: () => ({ sha256: "c".repeat(64) }),
+      collectResources: () => ({ meetsMinimum: true }),
+      referenceExecutionDependencies: {
+        inspectStorage: () => ({
+          availableBytes: String(1024 * 1024 * 1024),
+          minimumRequiredBytes: String(64 * 1024 * 1024),
+          mountPoint: "/mnt/results",
+          filesystemType: "ext4",
+          source,
+          classification: "likely-persistent",
+          warning: null,
+        }),
+      },
+      executeProfile: async (options, execution, executionDependencies) => {
+        admittedStorage = executionDependencies.inspectStorage(options.resultsRoot);
+        return {
+          executed: false,
+          plan: {
+            outputRoot: options.resultsRoot,
+            outputLeaf: path.join(options.resultsRoot, options.outputName),
+            selection: {
+              targetCpu: options.targetCpu,
+              controllerCpu: options.controllerCpu,
+              loadCpus: [...options.loadCpus],
+              attemptsPerLeg: options.attemptsPerLeg,
+            },
+            storage: admittedStorage,
+            ...execution.planExtra,
+          },
+        };
+      },
+    });
+    assert.equal(admittedStorage.classification, "unknown", source);
+    assert.match(admittedStorage.warning, /^WARNING:/, source);
+    assert.doesNotMatch(renderReferenceConfirmationDryRun(result.plan), /'--yes'/, source);
+  }
+});
+
 test("singleton controller revalidation is explicit and ineligible sources never execute", async () => {
   const value = snapshot();
   let ownerChecks = 0;
