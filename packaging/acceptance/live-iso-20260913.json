@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "startedAt": "2026-09-13T16:34:09.458Z",
+  "iso": {
+    "filename": "ubuntu-26.04.1-desktop-amd64.iso",
+    "bytes": 6482409472,
+    "sha256": "601e30fbf5d97759367c632e2c33630665039b7e2158fd068403da3ccf1bda1f",
+    "volumeId": "Ubuntu 26.04.1 LTS amd64"
+  },
+  "candidate": {
+    "archiveSha256": "d472769fd180f7e1ff2968a1a96d90ae44e8f5885fc65c657eaf4f298d5a0641",
+    "supportManifestSha256": "7d661ed95ca8f1db36d4a679e63a1768e80a7141560d4106b2da7c76fcd7162a",
+    "acceptanceHelperSha256": "3ce7a0a4134fb6ac44dd12004f72652d49fe8a33e26abfe7a58cd3289e46c6f2",
+    "extractorSha256": "b6e81a39512348aa43c83daa9b1054ccd85c8fa96351372390b01bf7d7a54a0e",
+    "releaseVersion": "0.1.0-dev.297058c4e05b",
+    "sourceCommit": "297058c4e05b7e86c66fc3bacfeba01b3a64a47e"
+  },
+  "hostHarness": {
+    "sha256": "84c20797376d88c8f5e7b0b4b543d198f7a2b784369bbec7e861c4257e24bb40"
+  },
+  "vm": {
+    "cpus": 4,
+    "memoryMiB": 4096,
+    "timeoutSeconds": 900,
+    "acceleration": "kvm",
+    "qemuVersion": "QEMU emulator version 11.1.1",
+    "launcher": "prlimit",
+    "qemuProcessMemlockBytes": 0,
+    "prlimitVersion": "prlimit from util-linux 2.42.3"
+  },
+  "serialLog": "serial.log",
+  "completedAt": "2026-09-13T16:36:16.125Z",
+  "checks": [
+    "pinned ISO identity",
+    "stock live-image dependencies",
+    "read-only candidate support checksums",
+    "final release checksums",
+    "structured safe extraction",
+    "bundled runtime versions",
+    "launcher help",
+    "result preparer help",
+    "ext4-backed dry run",
+    "dry run created no result content"
+  ]
+}
