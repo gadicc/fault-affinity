@@ -202,6 +202,37 @@ test("execution applies the injectable host and output-capacity guards before cr
   })), /active results require a Unix filesystem/);
 });
 
+test("persistent confirmation admission refuses unknown storage before creating output", async () => {
+  const root = directory("reference-confirmation-storage-guard-");
+  const outputName = "reference-confirmation-20260913T200005Z-storage";
+  await assert.rejects(executeReferenceProfile({
+    dryRun: false,
+    yes: true,
+    resultsRoot: root,
+    outputName,
+    targetCpu: 3,
+    controllerCpu: 4,
+    loadCpus: [0, 1, 2],
+    attemptsPerLeg: REFERENCE_CONFIRMATION_PROFILE.attemptsPerLeg,
+  }, {
+    formatVersion: 2,
+    profile: REFERENCE_CONFIRMATION_PROFILE,
+    requirePersistentStorage: true,
+    planExtra: { confirmation: { version: 1 } },
+  }, harmlessDependencies({
+    inspectStorage: () => ({
+      availableBytes: String(1024 * 1024 * 1024),
+      minimumRequiredBytes: String(64 * 1024 * 1024),
+      mountPoint: "/mnt/results",
+      filesystemType: "ext4",
+      source: "/dev/loop0",
+      classification: "unknown",
+      warning: "WARNING: fixture storage is ephemeral.",
+    }),
+  })), (error) => error.code === "REFERENCE_RESULTS_FILESYSTEM_UNSUPPORTED");
+  assert.equal(existsSync(path.join(root, outputName)), false);
+});
+
 test("storage inspection records capacity and warns without failing on uncertain persistence", () => {
   const persistent = inspectOutputStorage("/media/ubuntu/USB/results", {
     statfs: () => ({ bavail: 1000n, bsize: 4096n }),
