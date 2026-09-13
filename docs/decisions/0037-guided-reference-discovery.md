@@ -97,6 +97,10 @@ same reviewed clean environment as the measured target, `survive-window`
 semantics with a one-hour outer deadline, and 1-second TERM followed by
 2-second KILL cleanup. The controller bounds the requested loaded window below
 that deadline and verifies every worker stopped before recovery or publication.
+The launcher remains `/usr/bin/yes`; its identity records the canonical target.
+Version 1 permits the direct `/usr/bin/yes` target and Ubuntu 26.04.1's reviewed
+`/usr/lib/cargo/bin/coreutils/yes` target, and binds the exact bytes in either
+case.
 
 The discovery protocol is new and has not inherited the case study's measured
 reproduction rate. Documentation must distinguish “same frozen measured
