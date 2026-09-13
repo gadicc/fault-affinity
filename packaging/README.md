@@ -86,6 +86,11 @@ The explicit four-CPU layout is an acceptance fixture, not a recommendation.
 `mktemp` creates new, empty directories each time, so an earlier check cannot
 contaminate a later one.
 
+The packaged `prepare-results` command accepts both the fixed reference result
+and a stable guided-discovery collection. It takes the relevant exclusive
+lease, rederives discovery reports from authoritative child bundles, and labels
+partial exports `incomplete-non-selection-evidence`.
+
 ## Automate the Ubuntu live-image boundary locally
 
 `live-iso-acceptance.mjs` boots the pinned, unmodified Ubuntu 26.04.1 Desktop

@@ -33,7 +33,11 @@ After the run, create a privacy-reviewable archive with:
 
   ./share/prepare-results \
     --results-root /absolute/path/to/results-root \
-    --bundle /absolute/path/to/results-root/completed-bundle \
+    --bundle /absolute/path/to/results-root/result-or-discovery-collection \
     --destination /absolute/path/to/persistent-destination
+
+The same command accepts complete or interrupted guided screens. Interrupted
+exports are labelled incomplete-non-selection-evidence and never gain a
+candidate from missing samples.
 
 Review share/UPLOAD-RESULTS.txt before moving or uploading evidence.

@@ -111,6 +111,7 @@ test("resume defaults to a read-only preview and requires --yes to execute", asy
       plan: { identity: { kitRoot: "/opt/fault affinity" } },
       report: { complete: false },
     }),
+    revalidateResume: () => {},
     resumeCampaign: async () => { resumed = true; },
     renderReport: () => Buffer.from("PARTIAL REPORT\n"),
     output: (value) => output.push(value),
@@ -138,6 +139,32 @@ test("resume defaults to a read-only preview and requires --yes to execute", asy
   });
   assert.equal(resumed, true);
   assert.equal(liveStatus, 1);
+});
+
+test("resume preview offers preservation instead of an unusable cross-boot command", async () => {
+  const output = [];
+  const status = await runReferenceDiscoveryCli(["--resume", "/results/collection"], {
+    validateHost: () => {},
+    deriveReport: async () => ({
+      plan: {
+        identity: { kitRoot: "/opt/fault affinity" },
+        storage: { resultsRoot: "/results" },
+      },
+      report: { complete: false },
+    }),
+    revalidateResume: () => {
+      throw Object.assign(new Error("boot changed"), {
+        code: "REFERENCE_DISCOVERY_PREVIEW_MISMATCH",
+      });
+    },
+    renderReport: () => Buffer.from("PARTIAL REPORT\n"),
+    output: (value) => output.push(value),
+    errorOutput: (value) => output.push(value),
+  });
+  assert.equal(status, 0);
+  assert.match(output[0], /cannot resume/);
+  assert.match(output[0], /share\/prepare-results/);
+  assert.doesNotMatch(output[0], /--resume.*--yes/);
 });
 
 test("report mode is read-only, supports JSON, and maps lease contention to 75", async () => {

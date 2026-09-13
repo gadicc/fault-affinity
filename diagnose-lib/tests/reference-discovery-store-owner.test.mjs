@@ -34,6 +34,7 @@ import {
   revalidateReferenceDiscoveryContext,
   revalidateReferenceDiscoveryExecution,
   revalidateReferenceDiscoveryOwnerExecution,
+  revalidateReferenceDiscoveryReadContext,
 } from "../../src/reference-kit/discovery-controller.mjs";
 import { runReferenceDiscoverySessionProcess } from
   "../../src/reference-kit/discovery-session-client.mjs";
@@ -380,6 +381,10 @@ test("read-only context revalidation does not impose live memory or storage admi
   dependencies.inspectStorage = () => { throw new Error("must not inspect live capacity"); };
   const context = revalidateReferenceDiscoveryContext(plan, dependencies);
   assert.equal(context.workloads.measured.digest, plan.identity.measuredWorkloadDigest);
+  dependencies.collectTopology = () => { throw new Error("must not require the original boot"); };
+  dependencies.collectHost = () => { throw new Error("must not require the original boot"); };
+  const afterReboot = revalidateReferenceDiscoveryReadContext(plan, dependencies);
+  assert.equal(afterReboot.workloads.measured.digest, plan.identity.measuredWorkloadDigest);
 });
 
 test("pinned-owner topology uses its current nested cgroup rather than the root mask", () => {

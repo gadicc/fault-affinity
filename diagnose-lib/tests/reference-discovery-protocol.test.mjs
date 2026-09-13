@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import {
+  existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -54,6 +56,7 @@ import {
   publishReferenceDiscoveryReport,
   verifyReferenceDiscoveryReportPublication,
 } from "../../src/reference-kit/discovery-store.mjs";
+import { prepareResults } from "../../src/reference-kit/prepare-results.mjs";
 
 const HASHES = Object.freeze({
   boot: "a".repeat(64),
@@ -308,6 +311,8 @@ function createReportFixture(targetCount = 1) {
   return {
     root,
     plan: value,
+    measured,
+    auxiliary,
     async child(session, legs = {}) {
       bundleIndex += 1;
       const bundleDir = path.join(value.storage.collectionDir, session.directory);
@@ -379,6 +384,30 @@ function createReportFixture(targetCount = 1) {
         auxiliary,
         bundleDir,
       });
+    },
+  };
+}
+
+function discoveryPrepareDependencies(fixture, now) {
+  return {
+    now: () => now,
+    discoveryDependencies: {
+      revalidationDependencies: {
+        host: { platform: "linux", architecture: "x64", uid: 1000 },
+        environment: { HOME: fixture.root },
+        resolveLayout: () => ({
+          root: fixture.plan.identity.kitRoot,
+          releaseFile: fixture.plan.identity.releaseFile.path,
+        }),
+        collectReleaseFileIdentity: () => structuredClone(fixture.plan.identity.releaseFile),
+        collectKitIdentity: () => ({}),
+        environmentBindingKey: () => Buffer.alloc(32, 1),
+        resolveWorkloads: () => ({
+          measured: fixture.measured,
+          auxiliary: fixture.auxiliary,
+        }),
+        collectIdentity: () => structuredClone(fixture.plan.identity),
+      },
     },
   };
 }
@@ -752,6 +781,159 @@ test("all-pass and retried artifact-derived reports cannot fabricate a candidate
     );
     assert.equal(reconciled.status, "complete-ineligible");
     assert.equal(reconciled.highestObservedFaultRateCandidate, null);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("result preparation exports complete and incomplete discovery collections", {
+  timeout: 30_000,
+}, async () => {
+  for (const complete of [true, false]) {
+    const fixture = createReportFixture();
+    try {
+      await createReferenceDiscoveryCollection(fixture.plan);
+      const session = fixture.plan.schedule.sessions[0];
+      await fixture.child(session, { complete });
+      if (complete) {
+        const [start, terminal] = historyPair(session, 1);
+        await withReferenceDiscoveryHistoryStore({
+          collectionDir: fixture.plan.storage.collectionDir,
+        }, async (store) => {
+          await publishReferenceDiscoveryHistoryStart(store, fixture.plan, start);
+          await publishReferenceDiscoveryHistoryTerminal(store, fixture.plan, terminal);
+        });
+      }
+      const destination = path.join(fixture.root, complete ? "complete-export" : "partial-export");
+      mkdirSync(destination, { mode: 0o700 });
+      const options = {
+        resultsRoot: fixture.root,
+        bundle: fixture.plan.storage.collectionDir,
+        destination,
+      };
+      const dependencies = discoveryPrepareDependencies(fixture,
+        new Date(complete ? "2026-09-13T18:00:00Z" : "2026-09-13T18:00:01Z"));
+      const result = await prepareResults(options, dependencies);
+      assert.equal(result.status, complete
+        ? "complete-no-candidate" : "incomplete-non-selection-evidence");
+      assert.ok(path.basename(result.archive).startsWith(
+        `fault-affinity-discovery-${result.status}-`));
+      assert.equal(existsSync(result.archive), true);
+      assert.equal(existsSync(result.checksumFile), true);
+      assert.ok(result.inventory.some((item) => item.name ===
+        "reference-discovery-plan.json"));
+      assert.ok(result.inventory.some((item) => item.name.endsWith(
+        "/state/controlled-load/controlled-load-phase.json")));
+      assert.equal(existsSync(path.join(fixture.plan.storage.collectionDir, "history")), complete);
+      if (!complete) {
+        writeFileSync(path.join(fixture.plan.storage.collectionDir, "unexpected.txt"), "nope\n", {
+          mode: 0o600,
+        });
+        const rejectedDestination = path.join(fixture.root, "rejected-export");
+        mkdirSync(rejectedDestination, { mode: 0o700 });
+        await assert.rejects(prepareResults({
+          ...options,
+          destination: rejectedDestination,
+        }, dependencies), /unknown file 'unexpected\.txt'/);
+      }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("discovery preservation exports initialization and publication crash windows", {
+  timeout: 30_000,
+}, async () => {
+  for (const completeChild of [false, true]) {
+    const fixture = createReportFixture();
+    try {
+      await createReferenceDiscoveryCollection(fixture.plan);
+      if (completeChild) {
+        await fixture.child(fixture.plan.schedule.sessions[0]);
+      }
+      const partialReport = path.join(fixture.plan.storage.collectionDir,
+        REFERENCE_DISCOVERY_REPORT_JSON_FILE);
+      writeFileSync(partialReport, "partial-report\n", { mode: 0o600 });
+      const stranded = path.join(fixture.plan.storage.collectionDir, completeChild
+        ? ".reference-discovery-report.json.99999999.0123456789abcdef.ready.tmp"
+        : ".reference-discovery-report.md.99999999.0123456789abcdef.ready.tmp");
+      if (completeChild) linkSync(partialReport, stranded);
+      else writeFileSync(stranded, "stranded-report\n", { mode: 0o600 });
+      const destination = path.join(fixture.root,
+        completeChild ? "history-window-export" : "initialization-window-export");
+      mkdirSync(destination, { mode: 0o700 });
+      const dependencies = discoveryPrepareDependencies(fixture,
+        new Date(completeChild ? "2026-09-13T18:01:00Z" : "2026-09-13T18:01:01Z"));
+      if (!completeChild) {
+        dependencies.archive = async (snapshot, output) => {
+          const transient = path.join(fixture.plan.storage.collectionDir, "transient.txt");
+          writeFileSync(transient, "must not enter archive\n", { mode: 0o600 });
+          assert.equal(existsSync(path.join(snapshot, "transient.txt")), false);
+          writeFileSync(output, "exact inspected snapshot\n", { mode: 0o600 });
+          rmSync(transient);
+        };
+      } else {
+        dependencies.archive = async (snapshot, output) => {
+          assert.equal(lstatSync(path.join(snapshot,
+            REFERENCE_DISCOVERY_REPORT_JSON_FILE)).nlink, 1);
+          assert.equal(lstatSync(path.join(snapshot,
+            path.basename(stranded))).nlink, 1);
+          writeFileSync(output, "independent materialized files\n", { mode: 0o600 });
+        };
+      }
+      const result = await prepareResults({
+        resultsRoot: fixture.root,
+        bundle: fixture.plan.storage.collectionDir,
+        destination,
+      }, dependencies);
+      assert.equal(result.status, "incomplete-non-selection-evidence");
+      assert.notEqual(result.derivationError, null);
+      assert.ok(result.inventory.some((item) => item.name ===
+        REFERENCE_DISCOVERY_REPORT_JSON_FILE));
+      assert.ok(result.inventory.some((item) => item.name.endsWith(".ready.tmp")));
+      assert.equal(existsSync(result.archive), true);
+      if (completeChild) assert.equal(lstatSync(partialReport).nlink, 2);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("discovery export cleans its outputs when coordinator ownership is lost", async () => {
+  const fixture = createReportFixture();
+  try {
+    await createReferenceDiscoveryCollection(fixture.plan);
+    const destination = path.join(fixture.root, "lost-coordinator-export");
+    mkdirSync(destination, { mode: 0o700 });
+    const dependencies = discoveryPrepareDependencies(fixture,
+      new Date("2026-09-13T18:02:00Z"));
+    let checkpoints = 0;
+    dependencies.withReferenceDiscoveryPreservationSnapshot = async (_source, operation) =>
+      operation({
+        plan: fixture.plan,
+        report: null,
+        derivationError: { code: "FIXTURE", message: "fixture" },
+      }, {
+        assertHeld: () => {
+          checkpoints += 1;
+          if (checkpoints >= 4) {
+            throw Object.assign(new Error("coordinator lost"), {
+              code: "BUNDLE_EXECUTION_LEASE_LOST",
+            });
+          }
+          return true;
+        },
+      });
+    dependencies.archive = async (_source, output) => {
+      writeFileSync(output, "temporary archive\n", { mode: 0o600 });
+    };
+    await assert.rejects(prepareResults({
+      resultsRoot: fixture.root,
+      bundle: fixture.plan.storage.collectionDir,
+      destination,
+    }, dependencies), /coordinator lost/);
+    assert.deepEqual(readdirSync(destination), []);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

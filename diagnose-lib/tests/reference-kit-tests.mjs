@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -61,6 +62,9 @@ import {
 const LAUNCHER = fileURLToPath(new URL("../../src/reference-kit/run-reference", import.meta.url));
 const DISCOVERY_LAUNCHER = fileURLToPath(
   new URL("../../src/reference-kit/discover-reference", import.meta.url),
+);
+const PREPARE_LAUNCHER = fileURLToPath(
+  new URL("../../packaging/templates/prepare-results", import.meta.url),
 );
 
 const directories = [];
@@ -309,6 +313,34 @@ test("discovery launcher fixes PATH before resolving system utilities", () => {
   const result = spawnSync("/bin/sh", [path.join(kit, "bin/discover-reference"), "--help"], {
     encoding: "utf8",
     env: { HOME: fake, PATH: fake, LANG: "C.UTF-8" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(launched), true);
+  assert.equal(existsSync(marker), false);
+});
+
+test("result-preparation launcher fixes PATH before resolving system utilities", () => {
+  const fake = directory("reference-prepare-path-");
+  const kit = path.join(fake, "kit");
+  const marker = path.join(fake, "ambient-path-used");
+  const launched = path.join(fake, "bundled-runtime-used");
+  mkdirSync(path.join(kit, "share"), { recursive: true });
+  mkdirSync(path.join(kit, "runtime/controller/bin"), { recursive: true });
+  mkdirSync(path.join(kit, "app/src/reference-kit"), { recursive: true });
+  writeFileSync(path.join(kit, "share/prepare-results"), readFileSync(PREPARE_LAUNCHER));
+  chmodSync(path.join(kit, "share/prepare-results"), 0o755);
+  writeFileSync(path.join(kit, "runtime/controller/bin/node"),
+    `#!/bin/sh\n/usr/bin/touch '${launched}'\nexit 0\n`);
+  chmodSync(path.join(kit, "runtime/controller/bin/node"), 0o755);
+  writeFileSync(path.join(kit, "app/src/reference-kit/prepare-results.mjs"), "// fixture\n");
+  for (const utility of ["dirname", "env"]) {
+    const executable = path.join(fake, utility);
+    writeFileSync(executable, `#!/bin/sh\n/usr/bin/touch '${marker}'\nexit 99\n`);
+    chmodSync(executable, 0o755);
+  }
+  const result = spawnSync("/bin/sh", [path.join(kit, "share/prepare-results"), "--help"], {
+    encoding: "utf8",
+    env: { HOME: fake, TMPDIR: fake, PATH: fake, LANG: "C.UTF-8" },
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(existsSync(launched), true);
@@ -800,6 +832,21 @@ test("result preparation maps a held execution lease to a clear busy error", asy
       (error) => error instanceof PrepareResultsError && error.code === "RESULT_BUNDLE_BUSY" &&
         /bundle is busy/.test(error.message));
   });
+});
+
+test("discovery result preparation maps coordinator contention before archiving", async () => {
+  const root = directory("reference-discovery-prepare-busy-");
+  const bundle = path.join(root, "reference-discovery-20260913T190000Z-test");
+  const destination = path.join(root, "destination");
+  mkdirSync(bundle, { mode: 0o700 });
+  mkdirSync(destination, { mode: 0o700 });
+  writeFileSync(path.join(bundle, "reference-discovery-plan.json"), "{}\n", { mode: 0o600 });
+  await assert.rejects(prepareResults({ resultsRoot: root, bundle, destination }, {
+    withReferenceDiscoveryPreservationSnapshot: async () => {
+      throw Object.assign(new Error("busy"), { code: "BUNDLE_EXECUTION_LEASE_BUSY" });
+    },
+  }), (error) => error instanceof PrepareResultsError && error.code === "RESULT_BUNDLE_BUSY");
+  assert.deepEqual(readdirSync(destination), []);
 });
 
 test("archive collisions fail before work and checksum races clean only invocation-owned output", async () => {

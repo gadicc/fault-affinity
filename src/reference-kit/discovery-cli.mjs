@@ -7,6 +7,7 @@ import { BUNDLE_EXECUTION_LEASE_BUSY_EXIT } from "../../diagnose-lib/bundle-exec
 import { parseCpuList, validateReferenceHost } from "./controller.mjs";
 import {
   planReferenceDiscovery,
+  revalidateReferenceDiscoveryContext,
   renderReferenceDiscoveryDryRun,
 } from "./discovery-controller.mjs";
 import {
@@ -151,14 +152,24 @@ function usage() {
     `  --json              JSON output for --report\n`;
 }
 
-function renderResumePreview(result, collectionDir, renderReport = renderReferenceDiscoveryReportMarkdown) {
+function shellQuote(value) {
+  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
+}
+
+function renderResumePreview(result, collectionDir,
+  renderReport = renderReferenceDiscoveryReportMarkdown, { resumable = true } = {}) {
   const report = result.report;
   const launcher = path.join(result.plan.identity.kitRoot, "bin/discover-reference");
   const terminal = report.complete
     ? "This screen is already complete; no resume work is required."
-    : `To resume untouched targets on this same boot:\n\n` +
-      `'${launcher.replaceAll("'", `'\"'\"'`)}' '--resume' ` +
-      `'${collectionDir.replaceAll("'", `'\"'\"'`)}' '--yes'`;
+    : resumable
+      ? `To resume untouched targets on this same boot:\n\n` +
+        `${shellQuote(launcher)} '--resume' ${shellQuote(collectionDir)} '--yes'`
+      : "This collection belongs to a different boot or changed host context, so it cannot " +
+        "resume. Preserve it, then start a new screen:\n\n" +
+        `${shellQuote(path.join(result.plan.identity.kitRoot, "share/prepare-results"))} ` +
+        `'--results-root' ${shellQuote(result.plan.storage.resultsRoot)} ` +
+        `'--bundle' ${shellQuote(collectionDir)} '--destination' '/path/to/persistent/destination'`;
   return `${renderReport(report).toString("utf8")}\n${terminal}\n\n` +
     "Nothing was executed.\n";
 }
@@ -195,8 +206,19 @@ export async function runReferenceDiscoveryCli(argv = process.argv.slice(2), dep
         const result = await (dependencies.deriveReport ?? deriveReferenceDiscoveryReport)(
           options.collectionDir,
         );
+        let resumable = true;
+        try {
+          await (dependencies.revalidateResume ?? revalidateReferenceDiscoveryContext)(
+            result.plan,
+            dependencies.revalidationDependencies ?? {},
+          );
+        } catch (error) {
+          if (error?.code !== "REFERENCE_DISCOVERY_PREVIEW_MISMATCH") throw error;
+          resumable = false;
+        }
         output(renderResumePreview(result, options.collectionDir,
-          dependencies.renderReport ?? renderReferenceDiscoveryReportMarkdown));
+          dependencies.renderReport ?? renderReferenceDiscoveryReportMarkdown,
+          { resumable }));
         return 0;
       }
       const result = await (dependencies.resumeCampaign ?? resumeReferenceDiscoveryCampaign)(

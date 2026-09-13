@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import {
-  revalidateReferenceDiscoveryContext,
+  revalidateReferenceDiscoveryReadContext,
   revalidateReferenceDiscoveryExecution,
 } from "./discovery-controller.mjs";
 import {
@@ -166,7 +166,8 @@ async function deriveReportInsideCoordinator(plan, collectionDir, coordinator, d
   publishWhenFinal = false,
   readOnly = false,
 } = {}) {
-  const revalidate = dependencies.revalidateContext ?? revalidateReferenceDiscoveryContext;
+  const revalidate = dependencies.revalidateReadContext ?? dependencies.revalidateContext ??
+    revalidateReferenceDiscoveryReadContext;
   const context = await revalidate(plan, dependencies.revalidationDependencies ?? {});
   checkpoint(coordinator);
   const history = await historySnapshot(collectionDir, plan, dependencies, { readOnly });
@@ -393,8 +394,20 @@ export async function resumeReferenceDiscoveryCampaign(collectionDir, {
 }
 
 export async function deriveReferenceDiscoveryReport(collectionDir, dependencies = {}) {
+  return withReferenceDiscoveryReportSnapshot(collectionDir,
+    (snapshot) => snapshot, dependencies);
+}
+
+export async function withReferenceDiscoveryReportSnapshot(
+  collectionDir,
+  operation,
+  dependencies = {},
+) {
   if (typeof collectionDir !== "string" || !path.isAbsolute(collectionDir)) {
     fail("reference discovery report requires an absolute collection path");
+  }
+  if (typeof operation !== "function") {
+    fail("reference discovery snapshot operation is required");
   }
   const readPlan = dependencies.readPlan ?? readReferenceDiscoveryPlan;
   const plan = await readPlan(collectionDir, {
@@ -416,6 +429,67 @@ export async function deriveReferenceDiscoveryReport(collectionDir, dependencies
       { readOnly: true },
     );
     checkpoint(coordinator);
-    return Object.freeze({ plan, collectionDir, report: derived.report });
+    const snapshot = Object.freeze({ plan, collectionDir, report: derived.report });
+    return operation(snapshot, coordinator);
+  });
+}
+
+export async function withReferenceDiscoveryPreservationSnapshot(
+  collectionDir,
+  operation,
+  dependencies = {},
+) {
+  if (typeof collectionDir !== "string" || !path.isAbsolute(collectionDir)) {
+    fail("reference discovery preservation requires an absolute collection path");
+  }
+  if (typeof operation !== "function") {
+    fail("reference discovery preservation operation is required");
+  }
+  const readPlan = dependencies.readPlan ?? readReferenceDiscoveryPlan;
+  const plan = await readPlan(collectionDir, {
+    ...(dependencies.flockPath === undefined ? {} : { flockPath: dependencies.flockPath }),
+    readOnly: true,
+  });
+  const withCoordinator = dependencies.withCoordinator ?? withReferenceDiscoveryCoordinator;
+  return withCoordinator({
+    collectionDir,
+    ...(dependencies.flockPath === undefined ? {} : { flockPath: dependencies.flockPath }),
+    readOnly: true,
+  }, async (coordinator) => {
+    checkpoint(coordinator);
+    const revalidate = dependencies.revalidateReadContext ?? dependencies.revalidateContext ??
+      revalidateReferenceDiscoveryReadContext;
+    const context = await revalidate(plan, dependencies.revalidationDependencies ?? {});
+    checkpoint(coordinator);
+    let report = null;
+    let derivationError = null;
+    try {
+      const derived = await deriveReportInsideCoordinator(
+        plan,
+        collectionDir,
+        coordinator,
+        {
+          ...dependencies,
+          revalidateReadContext: async () => context,
+        },
+        { readOnly: true },
+      );
+      report = derived.report;
+    } catch (error) {
+      checkpoint(coordinator);
+      derivationError = Object.freeze({
+        code: safeErrorCode(error),
+        message: String(error?.message ?? "report derivation failed")
+          .replace(/[\0\r\n]/g, " ").slice(0, 512),
+      });
+    }
+    checkpoint(coordinator);
+    const snapshot = Object.freeze({
+      plan,
+      collectionDir,
+      report,
+      derivationError,
+    });
+    return operation(snapshot, coordinator);
   });
 }

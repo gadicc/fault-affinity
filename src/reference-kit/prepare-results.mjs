@@ -8,16 +8,21 @@ import {
   createReadStream,
   createWriteStream,
   closeSync,
+  fstatSync,
   linkSync,
   lstatSync,
+  mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { once } from "node:events";
@@ -28,9 +33,19 @@ import { parseAttemptEvidence } from "../../diagnose-lib/attempt-evidence.mjs";
 import { resolvePersistedWorkloadDescriptor } from "../../diagnose-lib/workload-spec.mjs";
 import { parseControlledLoadSessionEnvelope } from "../../diagnose-lib/controlled-load-session.mjs";
 import {
+  assertBundleExecutionLeaseHeld,
   BundleExecutionLeaseError,
   withBundleExecutionLease,
 } from "../../diagnose-lib/bundle-execution-lease.mjs";
+import { withReferenceDiscoveryPreservationSnapshot } from "./discovery-campaign.mjs";
+import {
+  REFERENCE_DISCOVERY_COORDINATION_DIRECTORY,
+  REFERENCE_DISCOVERY_COORDINATION_FILE,
+  REFERENCE_DISCOVERY_PLAN_FILE,
+  REFERENCE_DISCOVERY_REPORT_COMPLETION_FILE,
+  REFERENCE_DISCOVERY_REPORT_JSON_FILE,
+  REFERENCE_DISCOVERY_REPORT_MARKDOWN_FILE,
+} from "./discovery-store.mjs";
 
 export const RESULT_ARCHIVE_FORMAT_VERSION = 1;
 export const RESULT_FILES = Object.freeze([
@@ -46,6 +61,10 @@ const FILE_LIMITS = Object.freeze({
   "result-state.json": 4 * 1024,
   "summary.md": 1024 * 1024,
 });
+const DISCOVERY_MAX_FILES = 4_096;
+const DISCOVERY_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
+const DISCOVERY_HISTORY_FILE_RE =
+  /^history\/reference-discovery-history-[0-9]{5}-(?:start|terminal)\.json$/;
 
 export class PrepareResultsError extends Error {
   constructor(message, code = "RESULT_PREPARATION_INVALID") {
@@ -394,15 +413,247 @@ function inspectBundle(resultsRoot, bundle) {
   return Object.freeze({ source, status: state.status, inventory: Object.freeze(inventory) });
 }
 
+function discoveryInventoryContract(plan, { preservation }) {
+  const allowedDirectories = new Set([REFERENCE_DISCOVERY_COORDINATION_DIRECTORY, "history"]);
+  const requiredDirectories = new Set([REFERENCE_DISCOVERY_COORDINATION_DIRECTORY]);
+  const allowedFiles = new Set([
+    REFERENCE_DISCOVERY_PLAN_FILE,
+    REFERENCE_DISCOVERY_COORDINATION_FILE,
+    REFERENCE_DISCOVERY_REPORT_JSON_FILE,
+    REFERENCE_DISCOVERY_REPORT_MARKDOWN_FILE,
+    REFERENCE_DISCOVERY_REPORT_COMPLETION_FILE,
+  ]);
+  const requiredFiles = new Set([
+    REFERENCE_DISCOVERY_PLAN_FILE,
+    REFERENCE_DISCOVERY_COORDINATION_FILE,
+  ]);
+  for (const session of plan.schedule.sessions) {
+    const root = session.directory;
+    const state = `${root}/state`;
+    const controlled = `${state}/controlled-load`;
+    const exact = `${state}/exact-cpu`;
+    for (const directory of [root, state, controlled, exact]) {
+      allowedDirectories.add(directory);
+      if (!preservation) requiredDirectories.add(directory);
+    }
+    for (const name of [
+      `${root}/fault-affinity-bundle.json`,
+      `${controlled}/controlled-load-phase.json`,
+      `${exact}/exact-cpu-phase.json`,
+    ]) {
+      allowedFiles.add(name);
+      if (!preservation) requiredFiles.add(name);
+    }
+    allowedFiles.add(`${root}/attempt-armed.json`);
+    allowedFiles.add(`${controlled}/controlled-load-session.json`);
+  }
+  return { allowedDirectories, requiredDirectories, allowedFiles, requiredFiles };
+}
+
+function interruptedCommitIdentity(relative, allowedFiles) {
+  const basename = path.posix.basename(relative);
+  const match = basename.match(/^\.(.+)\.([1-9][0-9]*)\.([a-f0-9]{16})\.(writing|ready)\.tmp$/);
+  if (match === null) return null;
+  const parent = path.posix.dirname(relative);
+  const final = parent === "." ? match[1] : `${parent}/${match[1]}`;
+  return allowedFiles.has(final) || DISCOVERY_HISTORY_FILE_RE.test(final)
+    ? { final, stage: match[4] }
+    : null;
+}
+
+function sameFileIdentity(left, right) {
+  return left.isFile() && right.isFile() && left.dev === right.dev && left.ino === right.ino &&
+    left.size === right.size && left.nlink === right.nlink && left.uid === right.uid &&
+    left.mode === right.mode && left.ctimeNs === right.ctimeNs && left.mtimeNs === right.mtimeNs;
+}
+
+function readBoundedStableFile(file, before, relative) {
+  let descriptor;
+  try {
+    descriptor = openSync(file, fsConstants.O_RDONLY |
+      (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+    const opened = fstatSync(descriptor, { bigint: true });
+    if (!sameFileIdentity(before, opened)) {
+      fail(`discovery member '${relative}' changed while it was opened`,
+        "RESULT_BUNDLE_CHANGED");
+    }
+    const expectedBytes = Number(opened.size);
+    if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0 ||
+        expectedBytes > 256 * 1024 * 1024) {
+      fail(`discovery member '${relative}' exceeds its file-size limit`);
+    }
+    const bytes = Buffer.allocUnsafe(expectedBytes);
+    let offset = 0;
+    while (offset < expectedBytes) {
+      const count = readSync(descriptor, bytes, offset, expectedBytes - offset, offset);
+      if (count === 0) break;
+      offset += count;
+    }
+    const extra = Buffer.allocUnsafe(1);
+    const extraBytes = readSync(descriptor, extra, 0, 1, offset);
+    const afterDescriptor = fstatSync(descriptor, { bigint: true });
+    const afterPath = lstatSync(file, { bigint: true });
+    if (offset !== expectedBytes || extraBytes !== 0 ||
+        !sameFileIdentity(opened, afterDescriptor) ||
+        !sameFileIdentity(afterDescriptor, afterPath)) {
+      fail(`discovery member '${relative}' changed while it was read`,
+        "RESULT_BUNDLE_CHANGED");
+    }
+    return bytes;
+  } catch (error) {
+    if (error instanceof PrepareResultsError) throw error;
+    fail(`discovery member '${relative}' could not be read safely`,
+      "RESULT_BUNDLE_CHANGED");
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function retainedReadyLinkForFinal(source, relative, stats, allowedFiles) {
+  const parent = path.posix.dirname(relative);
+  const directory = parent === "." ? source : path.join(source, ...parent.split("/"));
+  const matches = [];
+  for (const name of readdirSync(directory)) {
+    const candidate = parent === "." ? name : `${parent}/${name}`;
+    const interrupted = interruptedCommitIdentity(candidate, allowedFiles);
+    if (interrupted?.final !== relative || interrupted.stage !== "ready") continue;
+    const candidateStats = lstatSync(path.join(directory, name), { bigint: true });
+    if (candidateStats.nlink === 2n && sameFileIdentity(stats, candidateStats)) {
+      matches.push(candidate);
+    }
+  }
+  return matches.length === 1;
+}
+
+function inspectDiscoveryCollection(source, plan, report) {
+  const preservation = report === null;
+  if (plan.storage.collectionDir !== source) {
+    fail("discovery plan was moved from its bound collection path");
+  }
+  const rootStat = lstatSync(source, { bigint: true });
+  const uid = typeof process.getuid === "function" ? BigInt(process.getuid()) : null;
+  if (!rootStat.isDirectory() || (uid !== null && rootStat.uid !== uid) ||
+      (rootStat.mode & 0o077n) !== 0n) {
+    fail("discovery collection must be a private directory owned by the current user");
+  }
+  const contract = discoveryInventoryContract(plan, { preservation });
+  const observedDirectories = new Set();
+  const observedFiles = new Set();
+  const inventory = [];
+  let totalBytes = 0;
+
+  const walk = (directory, prefix = "") => {
+    for (const name of readdirSync(directory).sort()) {
+      if (name.length === 0 || Buffer.byteLength(name) > 255 || name === "." || name === ".." ||
+          [...name].some((character) => character.codePointAt(0) < 32 ||
+            character.codePointAt(0) === 127)) {
+        fail("discovery collection contains an unsafe path component");
+      }
+      const relative = prefix === "" ? name : `${prefix}/${name}`;
+      const file = path.join(directory, name);
+      const stats = lstatSync(file, { bigint: true });
+      if ((uid !== null && stats.uid !== uid) || (stats.mode & 0o077n) !== 0n) {
+        fail(`discovery member '${relative}' is not private and owned`);
+      }
+      if (stats.isDirectory()) {
+        if (!contract.allowedDirectories.has(relative)) {
+          fail(`discovery collection contains unknown directory '${relative}'`);
+        }
+        observedDirectories.add(relative);
+        walk(file, relative);
+        continue;
+      }
+      const interrupted = interruptedCommitIdentity(relative, contract.allowedFiles);
+      const recognizedFinal = contract.allowedFiles.has(relative) ||
+        DISCOVERY_HISTORY_FILE_RE.test(relative);
+      if (!stats.isFile() || stats.size > 256n * 1024n * 1024n ||
+          (stats.nlink !== 1n && stats.nlink !== 2n)) {
+        fail(`discovery member '${relative}' is not a safe bounded state file`);
+      }
+      if (stats.nlink === 2n) {
+        if (!preservation) {
+          fail(`discovery member '${relative}' is not a safe bounded state file`);
+        }
+        if (interrupted !== null) {
+          let final;
+          try { final = lstatSync(path.join(source, ...interrupted.final.split("/")), {
+            bigint: true,
+          }); } catch {
+            fail(`interrupted discovery member '${relative}' has an unsafe retained link`);
+          }
+          if (interrupted.stage !== "ready" || !sameFileIdentity(stats, final) ||
+              final.nlink !== 2n) {
+            fail(`interrupted discovery member '${relative}' has an unsafe retained link`);
+          }
+        } else if (!recognizedFinal ||
+            !retainedReadyLinkForFinal(source, relative, stats, contract.allowedFiles)) {
+          fail(`discovery member '${relative}' has an unsafe extra link`);
+        }
+      }
+      if (!contract.allowedFiles.has(relative) && !DISCOVERY_HISTORY_FILE_RE.test(relative) &&
+          !(preservation && interrupted !== null)) {
+        fail(`discovery collection contains unknown file '${relative}'`);
+      }
+      if (observedFiles.size >= DISCOVERY_MAX_FILES) {
+        fail("discovery collection exceeds its file-count limit");
+      }
+      totalBytes += Number(stats.size);
+      if (totalBytes > DISCOVERY_MAX_TOTAL_BYTES) {
+        fail("discovery collection exceeds its total byte limit");
+      }
+      const bytes = readBoundedStableFile(file, stats, relative);
+      observedFiles.add(relative);
+      inventory.push({
+        name: relative,
+        bytes: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      });
+    }
+  };
+  walk(source);
+
+  for (const directory of contract.requiredDirectories) {
+    if (!observedDirectories.has(directory)) {
+      fail(`discovery collection is missing directory '${directory}'`);
+    }
+  }
+  for (const file of contract.requiredFiles) {
+    if (!observedFiles.has(file)) fail(`discovery collection is missing file '${file}'`);
+  }
+  const reportFiles = [
+    REFERENCE_DISCOVERY_REPORT_JSON_FILE,
+    REFERENCE_DISCOVERY_REPORT_MARKDOWN_FILE,
+    REFERENCE_DISCOVERY_REPORT_COMPLETION_FILE,
+  ].filter((name) => observedFiles.has(name));
+  if (!preservation && reportFiles.length !== 0 && reportFiles.length !== 3) {
+    fail("discovery report publication is incomplete");
+  }
+  const historyFiles = [...observedFiles].filter((name) =>
+    DISCOVERY_HISTORY_FILE_RE.test(name));
+  if (historyFiles.length > 128) fail("discovery history exceeds its record limit");
+  const archiveEntries = [...new Set([
+    ...observedDirectories,
+    ...observedFiles,
+  ].map((name) => name.split("/")[0]))].sort();
+  return Object.freeze({
+    source,
+    kind: "reference-discovery-v1",
+    status: report?.complete === true ? report.status : "incomplete-non-selection-evidence",
+    inventory: Object.freeze(inventory),
+    directories: Object.freeze([...observedDirectories].sort()),
+    archiveEntries: Object.freeze(archiveEntries),
+  });
+}
+
 function stamp(now) {
   return now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
-async function archiveWithTar(source, output, spawnProcess = spawn) {
+async function archiveWithTar(source, output, spawnProcess = spawn, entries = RESULT_FILES) {
   const stream = createWriteStream(output, { flags: "wx", mode: 0o600 });
   const child = spawnProcess("/bin/tar", [
     "--create", "--gzip", "--format=ustar", "--numeric-owner", "--owner=0", "--group=0",
-    "--mtime=UTC 1970-01-01", "--sort=name", "--directory", source, ...RESULT_FILES,
+    "--mtime=UTC 1970-01-01", "--sort=name", "--directory", source, ...entries,
   ], { stdio: ["ignore", "pipe", "pipe"], env: { PATH: "/usr/bin:/bin", LC_ALL: "C" } });
   let stderr = "";
   child.stderr.setEncoding("utf8");
@@ -413,6 +664,52 @@ async function archiveWithTar(source, output, spawnProcess = spawn) {
     once(stream, "close"),
   ]);
   if (status.code !== 0 || status.signal !== null) fail(`tar failed: code=${status.code} signal=${status.signal} ${stderr.trim()}`);
+}
+
+function readStableSnapshotFile(source, item) {
+  const file = path.join(source, ...item.name.split("/"));
+  try {
+    const before = lstatSync(file, { bigint: true });
+    if (!before.isFile() || (before.nlink !== 1n && before.nlink !== 2n) ||
+        before.size !== BigInt(item.bytes)) {
+      fail(`discovery member '${item.name}' changed before snapshot copy`,
+        "RESULT_BUNDLE_CHANGED");
+    }
+    const bytes = readBoundedStableFile(file, before, item.name);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (bytes.length !== item.bytes || digest !== item.sha256) {
+      fail(`discovery member '${item.name}' changed while it was copied`,
+        "RESULT_BUNDLE_CHANGED");
+    }
+    return bytes;
+  } catch (error) {
+    if (error instanceof PrepareResultsError) throw error;
+    fail(`discovery member '${item.name}' could not be copied safely`,
+      "RESULT_BUNDLE_CHANGED");
+  }
+}
+
+function materializeDiscoverySnapshot(inspected) {
+  const scratch = mkdtempSync(path.join(tmpdir(), "fault-affinity-discovery-export-"));
+  try {
+    for (const directory of inspected.directories
+      .slice().sort((left, right) => left.split("/").length - right.split("/").length ||
+        left.localeCompare(right))) {
+      mkdirSync(path.join(scratch, ...directory.split("/")), { mode: 0o700 });
+    }
+    for (const item of inspected.inventory) {
+      const destination = path.join(scratch, ...item.name.split("/"));
+      mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+      writeFileSync(destination, readStableSnapshotFile(inspected.source, item), {
+        flag: "wx",
+        mode: 0o600,
+      });
+    }
+    return scratch;
+  } catch (error) {
+    rmSync(scratch, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function fileSha256(file) {
@@ -441,11 +738,65 @@ function publishArchive(temporary, finalArchive, dependencies) {
   return "exclusive-copy-checksum-commit-v1";
 }
 
+async function withDiscoveryChildLeases(
+  source,
+  plan,
+  dependencies,
+  operation,
+  index = 0,
+  checkpoints = [],
+) {
+  if (index >= plan.schedule.sessions.length) {
+    const assertChildrenHeld = () => {
+      for (const checkpoint of checkpoints) checkpoint();
+      return true;
+    };
+    assertChildrenHeld();
+    const result = await operation(assertChildrenHeld);
+    assertChildrenHeld();
+    return result;
+  }
+  const child = path.join(source, plan.schedule.sessions[index].directory);
+  try {
+    const stats = lstatSync(child, { bigint: true });
+    if (!stats.isDirectory()) fail("discovery child path is not a directory");
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return withDiscoveryChildLeases(
+        source, plan, dependencies, operation, index + 1, checkpoints);
+    }
+    throw error;
+  }
+  const runWithLease = dependencies.withBundleExecutionLease ?? withBundleExecutionLease;
+  return runWithLease({
+    bundleDir: child,
+    flockPath: dependencies.flockPath ?? "/usr/bin/flock",
+    waitMs: 0,
+  }, async (lease) => {
+    const checkpoint = () => assertBundleExecutionLeaseHeld(lease);
+    checkpoint();
+    const result = await withDiscoveryChildLeases(
+      source,
+      plan,
+      dependencies,
+      operation,
+      index + 1,
+      [...checkpoints, checkpoint],
+    );
+    checkpoint();
+    return result;
+  });
+}
+
 export async function prepareResults(rawOptions, dependencies = {}) {
   if (rawOptions === null || typeof rawOptions !== "object" || Array.isArray(rawOptions)) fail("options must be an object");
   const expected = ["resultsRoot", "bundle", "destination"];
   if (Object.keys(rawOptions).sort().join(",") !== expected.sort().join(",")) fail(`options must contain exactly: ${expected.sort().join(", ")}`);
   const source = canonicalBelow(rawOptions.resultsRoot, rawOptions.bundle, "bundle").child;
+  const sourceNames = readdirSync(source);
+  if (sourceNames.includes(REFERENCE_DISCOVERY_PLAN_FILE)) {
+    return prepareDiscoveryResults(rawOptions, source, dependencies);
+  }
   const runWithLease = dependencies.withBundleExecutionLease ?? withBundleExecutionLease;
   try {
     return await runWithLease({
@@ -464,12 +815,64 @@ export async function prepareResults(rawOptions, dependencies = {}) {
 
 async function prepareResultsWithLease(rawOptions, dependencies) {
   const inspected = inspectBundle(rawOptions.resultsRoot, rawOptions.bundle);
+  return publishPreparedResults(inspected, rawOptions, dependencies,
+    () => inspectBundle(rawOptions.resultsRoot, rawOptions.bundle));
+}
+
+async function prepareDiscoveryResults(rawOptions, source, dependencies) {
+  const withSnapshot = dependencies.withReferenceDiscoveryPreservationSnapshot ??
+    withReferenceDiscoveryPreservationSnapshot;
+  try {
+    return await withSnapshot(source, async ({ plan, report, derivationError }, coordinator) => {
+      const resultsRoot = realpathSync(rawOptions.resultsRoot);
+      if (plan.storage.resultsRoot !== resultsRoot) {
+        fail("discovery collection does not belong to the supplied results root");
+      }
+      return withDiscoveryChildLeases(source, plan, dependencies, async (assertChildrenHeld) => {
+        const assertSnapshot = () => {
+          coordinator.assertHeld();
+          assertChildrenHeld();
+          return true;
+        };
+        assertSnapshot();
+        const inspected = inspectDiscoveryCollection(source, plan, report);
+        const result = await publishPreparedResults(
+          inspected,
+          rawOptions,
+          dependencies,
+          () => inspectDiscoveryCollection(source, plan, report),
+          assertSnapshot,
+        );
+        assertSnapshot();
+        return Object.freeze({ ...result, derivationError });
+      });
+    }, dependencies.discoveryDependencies ?? {});
+  } catch (error) {
+    if (error?.code === "BUNDLE_EXECUTION_LEASE_BUSY") {
+      fail("discovery collection is busy; wait for its controller or another preparer to finish",
+        "RESULT_BUNDLE_BUSY");
+    }
+    throw error;
+  }
+}
+
+async function publishPreparedResults(
+  inspected,
+  rawOptions,
+  dependencies,
+  reinspect,
+  assertSnapshot = () => true,
+) {
+  assertSnapshot();
   const destination = realpathSync(rawOptions.destination);
   if (!statSync(destination).isDirectory()) fail("destination must be an existing directory");
   if (destination === inspected.source || destination.startsWith(`${inspected.source}${path.sep}`)) {
     fail("destination must be outside the source bundle");
   }
-  const base = `fault-affinity-results-${stamp((dependencies.now ?? (() => new Date()))())}.tar.gz`;
+  const prefix = inspected.kind === "reference-discovery-v1"
+    ? `fault-affinity-discovery-${inspected.status}`
+    : "fault-affinity-results";
+  const base = `${prefix}-${stamp((dependencies.now ?? (() => new Date()))())}.tar.gz`;
   const finalArchive = path.join(destination, base);
   const checksumFile = `${finalArchive}.sha256`;
   const temporary = path.join(destination, `.${base}.${process.pid}.writing`);
@@ -479,19 +882,34 @@ async function prepareResultsWithLease(rawOptions, dependencies) {
   let finalCreated = false;
   let checksumCreated = false;
   let publicationMode = null;
+  let snapshotDirectory = null;
   try {
-    await (dependencies.archive ?? archiveWithTar)(inspected.source, temporary, dependencies.spawnProcess);
-    const after = inspectBundle(rawOptions.resultsRoot, rawOptions.bundle);
+    if (inspected.kind === "reference-discovery-v1") {
+      snapshotDirectory = materializeDiscoverySnapshot(inspected);
+      assertSnapshot();
+    }
+    await (dependencies.archive ?? archiveWithTar)(
+      snapshotDirectory ?? inspected.source,
+      temporary,
+      dependencies.spawnProcess,
+      inspected.archiveEntries ?? RESULT_FILES,
+    );
+    assertSnapshot();
+    const after = reinspect();
+    assertSnapshot();
     if (JSON.stringify(after.inventory) !== JSON.stringify(inspected.inventory) || after.status !== inspected.status) {
       fail("source bundle changed while it was being archived", "RESULT_BUNDLE_CHANGED");
     }
     const digest = await fileSha256(temporary);
+    assertSnapshot();
     publicationMode = publishArchive(temporary, finalArchive, dependencies);
     finalCreated = true;
+    assertSnapshot();
     rmSync(temporary);
     const checksumFd = openSync(checksumFile, "wx", 0o600);
     checksumCreated = true;
     try { writeFileSync(checksumFd, `${digest}  ${base}\n`); } finally { closeSync(checksumFd); }
+    assertSnapshot();
     return Object.freeze({
       formatVersion: RESULT_ARCHIVE_FORMAT_VERSION,
       status: inspected.status,
@@ -509,12 +927,17 @@ async function prepareResultsWithLease(rawOptions, dependencies) {
     if (finalCreated) rmSync(finalArchive, { force: true });
     try { rmSync(temporary); } catch (cleanup) { if (cleanup?.code !== "ENOENT") throw cleanup; }
     throw error;
+  } finally {
+    if (snapshotDirectory !== null) {
+      rmSync(snapshotDirectory, { recursive: true, force: true });
+    }
   }
 }
 
 export function prepareResultsUsage() {
   return "Usage: prepare-results --results-root ROOT --bundle ROOT/BUNDLE --destination DEST\n\n" +
-    "Accepts only a terminal reference-kit v1 bundle with the exact file allowlist.\n" +
+    "Accepts a fixed reference result or a stable guided-discovery collection.\n" +
+    "Incomplete discovery exports are labelled incomplete-non-selection-evidence.\n" +
     "The bundle must be below ROOT and DEST must be an existing directory outside it.\n" +
     "Creates a new tar.gz and adjacent .sha256 without modifying the source bundle; DEST may be FAT/exFAT.\n" +
     "An exclusive bundle lease prevents preparation while a controller or another preparer owns it.";
@@ -545,6 +968,11 @@ export async function main(argv = process.argv.slice(2)) {
     }
     const result = await prepareResults(options);
     console.log(`Created ${result.archive}`);
+    console.log(`Status ${result.status}`);
+    if (result.derivationError !== undefined && result.derivationError !== null) {
+      console.log(`Preservation note ${result.derivationError.code}: ` +
+        result.derivationError.message);
+    }
     console.log(`SHA-256 ${result.sha256}`);
     for (const item of result.inventory) console.log(`${item.sha256}  ${item.bytes}  ${item.name}`);
     console.log(result.privacyWarning);

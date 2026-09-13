@@ -741,6 +741,56 @@ export function revalidateReferenceDiscoveryContext(planValue, dependencies = {}
   }
 }
 
+// Evidence inspection must continue to work after a reboot so an interrupted
+// live session can still be preserved. Rebuild the frozen workload identities
+// from the plan's bound host input, while still requiring the same verified kit
+// at the same canonical path. Live resume uses the stricter context check above.
+export function revalidateReferenceDiscoveryReadContext(planValue, dependencies = {}) {
+  const plan = parseReferenceDiscoveryPlan(planValue);
+  validateReferenceHost(dependencies.host);
+  const ambient = dependencies.environment ?? process.env;
+  assertSafeAmbientEnvironment(ambient);
+  const launchEnvironment = reviewedLaunchEnvironment(ambient);
+  const layout = (dependencies.resolveLayout ?? resolveKitLayout)();
+  const collectReleaseFileIdentity = dependencies.collectReleaseFileIdentity ??
+    referenceDiscoveryReleaseFileIdentity;
+  const releaseFileBefore = collectReleaseFileIdentity(layout.releaseFile);
+  const observedIdentity = (dependencies.collectKitIdentity ?? collectReferenceKitIdentity)(layout);
+  const releaseFileAfter = collectReleaseFileIdentity(layout.releaseFile);
+  if (canonicalProtocolJson(releaseFileBefore) !== canonicalProtocolJson(releaseFileAfter)) {
+    fail("release declaration changed while identity was revalidated",
+      "REFERENCE_DISCOVERY_IDENTITY_INVALID");
+  }
+  const bindingKey = (dependencies.environmentBindingKey ??
+    referenceDiscoveryEnvironmentBindingKey)(
+    { root: layout.root, releaseFile: releaseFileAfter },
+    plan.host,
+  );
+  if (!Buffer.isBuffer(bindingKey) || bindingKey.length < 32) {
+    fail("environment binding key is invalid", "REFERENCE_DISCOVERY_IDENTITY_INVALID");
+  }
+  try {
+    const workloads = (dependencies.resolveWorkloads ?? resolveReferenceDiscoveryWorkloads)(
+      layout,
+      launchEnvironment,
+      bindingKey,
+    );
+    const identity = (dependencies.collectIdentity ?? collectReferenceDiscoveryIdentity)(
+      layout,
+      observedIdentity,
+      workloads,
+      releaseFileAfter,
+    );
+    if (canonicalProtocolJson(identity) !== canonicalProtocolJson(plan.identity)) {
+      fail("reference discovery kit/workload identity changed after collection",
+        "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
+    }
+    return Object.freeze({ plan, layout, launchEnvironment, workloads });
+  } finally {
+    bindingKey.fill(0);
+  }
+}
+
 export function revalidateReferenceDiscoveryExecution(planValue, dependencies = {}) {
   const plan = parseReferenceDiscoveryPlan(planValue);
   if (!plan.resources.meetsMinimum || !plan.storage.meetsMinimum ||
