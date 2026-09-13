@@ -558,6 +558,18 @@ test("identity and resource bindings reject runtime substitution and inconsisten
     identity: wrongRuntime, host: host(), resources: resources(),
   }), /runtime versions/);
 
+  const ubuntuIdentity = identity();
+  ubuntuIdentity.yes.path = "/usr/lib/cargo/bin/coreutils/yes";
+  assert.equal(buildReferenceDiscoveryPlan(hybridTopology(), {
+    identity: ubuntuIdentity, host: host(), resources: resources(), storage: storage(),
+  }).identity.yes.path, "/usr/lib/cargo/bin/coreutils/yes");
+
+  const unreviewedYes = identity();
+  unreviewedYes.yes.path = "/usr/local/bin/yes";
+  assert.throws(() => buildReferenceDiscoveryPlan(hybridTopology(), {
+    identity: unreviewedYes, host: host(), resources: resources(), storage: storage(),
+  }), /system executable paths/);
+
   const low = plan(hybridTopology(), {
     resources: resources({ available: 1024n ** 3n, current: null, maximum: null }),
   });

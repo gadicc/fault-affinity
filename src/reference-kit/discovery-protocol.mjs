@@ -56,6 +56,10 @@ const PERSISTENCE_CLASSES = new Set([
 const NON_UNIX_FILESYSTEMS = new Set(["vfat", "exfat", "ntfs", "ntfs3", "fuseblk"]);
 const VOLATILE_FILESYSTEMS = new Set(["tmpfs", "ramfs", "overlay", "aufs"]);
 const EPHEMERAL_BLOCK_SOURCE_RE = /^\/dev\/(?:loop|ram|zram)[0-9]+(?:p[0-9]+)?$/;
+const REFERENCE_YES_PATHS = Object.freeze([
+  "/usr/bin/yes",
+  "/usr/lib/cargo/bin/coreutils/yes",
+]);
 const DISCOVERY_OUTPUT_NAME_RE =
   /^reference-discovery-[0-9]{8}T[0-9]{6}Z(?:-[a-z0-9][a-z0-9-]{0,31})?$/;
 const STORAGE_WARNINGS = Object.freeze({
@@ -280,7 +284,7 @@ function parseIdentity(value) {
   if (controllerRuntime.version !== "v24.21.0" || targetRuntime.version !== "v25.2.1") {
     fail("reference discovery runtime versions do not match the frozen profile");
   }
-  if (taskset.path !== "/usr/bin/taskset" || yes.path !== "/usr/bin/yes") {
+  if (taskset.path !== "/usr/bin/taskset" || !REFERENCE_YES_PATHS.includes(yes.path)) {
     fail("reference discovery system executable paths do not match the protocol");
   }
   for (const [record, label] of [
