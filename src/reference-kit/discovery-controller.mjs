@@ -20,6 +20,7 @@ import {
 import {
   REFERENCE_DISCOVERY_MINIMUM_HEADROOM_BYTES,
   REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES,
+  REFERENCE_DISCOVERY_PROTOCOL,
   REFERENCE_DISCOVERY_PROFILE,
   buildReferenceDiscoveryPlan,
   parseReferenceDiscoveryPlan,
@@ -29,6 +30,11 @@ import {
 
 export const REFERENCE_DISCOVERY_OUTPUT_PREFIX = "reference-discovery-";
 export const REFERENCE_DISCOVERY_CONDITION_ID = "reference-guided-yes-load";
+export const REFERENCE_CONFIRMATION_PROFILE = Object.freeze({
+  id: "load-aba-discovered-confirmation",
+  version: 1,
+  pgliteVersion: "0.5.4",
+});
 
 const MAX_SYSTEM_TEXT_BYTES = 1024 * 1024;
 const SAFE_OUTPUT_NAME_RE =
@@ -48,6 +54,23 @@ export class ReferenceDiscoveryControllerError extends Error {
 
 function fail(message, code) {
   throw new ReferenceDiscoveryControllerError(message, code);
+}
+
+export function validateReferenceDiscoveryReleaseDeclaration(value) {
+  const discovery = value?.profiles?.referenceDiscovery;
+  const confirmation = value?.profiles?.referenceConfirmation;
+  if (value?.capabilities?.referenceDiscovery !== 1 ||
+      discovery?.id !== REFERENCE_DISCOVERY_PROFILE.id ||
+      discovery?.version !== REFERENCE_DISCOVERY_PROFILE.version ||
+      discovery?.protocol !== REFERENCE_DISCOVERY_PROTOCOL ||
+      discovery?.pgliteVersion !== "0.5.4" ||
+      confirmation?.id !== REFERENCE_CONFIRMATION_PROFILE.id ||
+      confirmation?.version !== REFERENCE_CONFIRMATION_PROFILE.version ||
+      confirmation?.pgliteVersion !== REFERENCE_CONFIRMATION_PROFILE.pgliteVersion) {
+    fail("RELEASE.json guided reference profiles or capability are invalid",
+      "REFERENCE_RELEASE_IDENTITY_MISMATCH");
+  }
+  return value;
 }
 
 function digestBytes(value) {
@@ -486,6 +509,7 @@ export function resolveReferenceDiscoveryWorkloads(layout, launchEnvironment, bi
 }
 
 export function collectReferenceDiscoveryIdentity(layout, observed, workloads, releaseFile) {
+  validateReferenceDiscoveryReleaseDeclaration(observed?.release);
   const controllerRuntime = fileIdentity(layout.controllerNode, observed.executables.controller, {
     version: true,
   });
@@ -787,7 +811,7 @@ export function renderReferenceDiscoveryDryRun(planValue) {
     `  target ${targetCpu} (controller ${controllerCpu})`);
   const previewBinding = referenceDiscoveryPreviewBinding(plan);
   const command = [
-    "./bin/discover-reference",
+    path.join(plan.identity.kitRoot, "bin/discover-reference"),
     "--results-root", plan.storage.resultsRoot,
     "--output-name", path.basename(plan.storage.collectionDir),
     ...(plan.selection.mode === "explicit" ? [

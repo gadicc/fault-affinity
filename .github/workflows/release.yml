@@ -52,6 +52,7 @@ jobs:
       - name: Run hermetic validation only
         run: |
           npm test
+          bash -n src/reference-kit/discover-reference
           bash -n src/reference-kit/run-reference
           bash -n packaging/templates/prepare-results
       - name: Compile native harness without executing it
@@ -166,6 +167,7 @@ jobs:
           mkdir "$RUNNER_TEMP/final-smoke"
           tar -xzf dist/release/fault-affinity-live-linux-x64.tar.gz \
             -C "$RUNNER_TEMP/final-smoke"
+          "$RUNNER_TEMP/final-smoke/fault-affinity/bin/discover-reference" --help
           "$RUNNER_TEMP/final-smoke/fault-affinity/bin/run-reference" --help
           "$RUNNER_TEMP/final-smoke/fault-affinity/share/prepare-results" --help
 

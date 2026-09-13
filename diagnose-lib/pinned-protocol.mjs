@@ -751,18 +751,33 @@ function removeStateFile(directory, name) {
   return true;
 }
 
-export function createFileStateAdapter(stateDirectory) {
+function fileStateAdapter(stateDirectory, { recover }) {
   const directory = validateAbsolutePath(stateDirectory, "state directory");
   validateStateDirectory(directory);
   return Object.freeze({
     list: () => {
-      recoverInterruptedStateCommits(directory);
+      if (recover) recoverInterruptedStateCommits(directory);
       return listStableDirectory(directory);
     },
     read: (name, maxBytes) => readStableStateFile(directory, name, maxBytes),
-    commit: (name, bytes) => commitStateFile(directory, name, bytes),
-    remove: (name) => removeStateFile(directory, name),
+    commit: recover
+      ? (name, bytes) => commitStateFile(directory, name, bytes)
+      : () => { throw new PinnedProtocolStateError("read-only state adapter cannot commit"); },
+    remove: recover
+      ? (name) => removeStateFile(directory, name)
+      : () => { throw new PinnedProtocolStateError("read-only state adapter cannot remove"); },
   });
+}
+
+export function createFileStateAdapter(stateDirectory) {
+  return fileStateAdapter(stateDirectory, { recover: true });
+}
+
+// Inspection commands must not silently publish or remove a stranded commit.
+// Temporary entries remain visible to the format-specific reader, which then
+// fails closed because they are outside its accepted final-file inventory.
+export function createReadOnlyFileStateAdapter(stateDirectory) {
+  return fileStateAdapter(stateDirectory, { recover: false });
 }
 
 function resolveStateAdapter(options) {

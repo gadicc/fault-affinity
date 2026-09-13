@@ -23,6 +23,7 @@ import {
   canonicalProtocolJson,
   PinnedProtocolStateError,
   createFileStateAdapter,
+  createReadOnlyFileStateAdapter,
 } from "../../diagnose-lib/pinned-protocol.mjs";
 import {
   SCHEMA3_BUNDLE_FILE,
@@ -95,8 +96,11 @@ function validateDirectory(directory, label, { privateDirectory = true } = {}) {
   return canonical;
 }
 
-function adapterFor(directory) {
-  return createFileStateAdapter(validateDirectory(directory, "reference discovery collection"));
+function adapterFor(directory, { readOnly = false } = {}) {
+  const validated = validateDirectory(directory, "reference discovery collection");
+  return readOnly
+    ? createReadOnlyFileStateAdapter(validated)
+    : createFileStateAdapter(validated);
 }
 
 function ensurePrivateSubdirectory(parent, name, label) {
@@ -155,11 +159,11 @@ async function ensureCoordinationWithLease(plan, collection, adapter, lease) {
   return directory;
 }
 
-async function readCoordinationContext(collectionDir, flockPath) {
+async function readCoordinationContext(collectionDir, flockPath, { readOnly = false } = {}) {
   return withBundleExecutionLease({ bundleDir: collectionDir, flockPath }, async (lease) => {
     assertBundleExecutionLeaseHeld(lease);
     const collection = validateDirectory(collectionDir, "reference discovery collection");
-    const adapter = adapterFor(collection);
+    const adapter = adapterFor(collection, { readOnly });
     await adapter.list();
     assertBundleExecutionLeaseHeld(lease);
     const plan = await readPlanFromAdapter(adapter, lease);
@@ -306,9 +310,11 @@ export async function withReferenceDiscoveryCoordinator({
   collectionDir,
   flockPath,
   waitMs = 0,
+  readOnly = false,
 }, operation) {
   if (typeof operation !== "function") fail("reference discovery coordinator operation is required");
-  const context = await readCoordinationContext(collectionDir, flockPath);
+  if (typeof readOnly !== "boolean") fail("reference discovery read-only selection is invalid");
+  const context = await readCoordinationContext(collectionDir, flockPath, { readOnly });
   let collectionFd;
   try {
     collectionFd = openSync(context.collection, constants.O_RDONLY |
@@ -439,7 +445,9 @@ export async function verifyReferenceDiscoveryReportPublication({
   collectionDir,
   report,
   flockPath,
+  readOnly = false,
 }) {
+  if (typeof readOnly !== "boolean") fail("reference discovery read-only selection is invalid");
   const expected = new Map([
     [REFERENCE_DISCOVERY_REPORT_JSON_FILE, {
       bytes: canonicalReferenceDiscoveryReportLine(report), maximum: REPORT_MAX_BYTES,
@@ -460,7 +468,7 @@ export async function verifyReferenceDiscoveryReportPublication({
   });
   return withBundleExecutionLease({ bundleDir: collectionDir, flockPath }, async (lease) => {
     assertBundleExecutionLeaseHeld(lease);
-    const adapter = adapterFor(collectionDir);
+    const adapter = adapterFor(collectionDir, { readOnly });
     const names = await adapter.list();
     assertBundleExecutionLeaseHeld(lease);
     const plan = await readPlanFromAdapter(adapter, lease);
@@ -490,10 +498,14 @@ export async function verifyReferenceDiscoveryReportPublication({
   });
 }
 
-export async function readReferenceDiscoveryPlan(collectionDir, { flockPath } = {}) {
+export async function readReferenceDiscoveryPlan(collectionDir, {
+  flockPath,
+  readOnly = false,
+} = {}) {
+  if (typeof readOnly !== "boolean") fail("reference discovery read-only selection is invalid");
   return withBundleExecutionLease({ bundleDir: collectionDir, flockPath }, async (lease) => {
     assertBundleExecutionLeaseHeld(lease);
-    const adapter = adapterFor(collectionDir);
+    const adapter = adapterFor(collectionDir, { readOnly });
     await adapter.list();
     assertBundleExecutionLeaseHeld(lease);
     const plan = await readPlanFromAdapter(adapter, lease);

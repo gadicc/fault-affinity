@@ -893,6 +893,7 @@ export async function readReferenceDiscoveryChild({
   auxiliary,
   bundleDir,
   flockPath,
+  readOnly = false,
 }) {
   const plan = parseReferenceDiscoveryPlan(planValue);
   const ordinal = integer(sessionOrdinal, "reference discovery child session ordinal", 1,
@@ -913,6 +914,7 @@ export async function readReferenceDiscoveryChild({
     auxiliary,
     bundleDir,
     ...(flockPath === undefined ? {} : { flockPath }),
+    recoverState: !readOnly,
   });
   assertReferenceDiscoveryChildBundle(plan, ordinal, bundle);
   const complete = bundle.controlledLoad.progress.complete;

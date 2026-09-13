@@ -14,6 +14,8 @@ archive with `MODE-MANIFEST.json`, rather than as loose Actions artifact files.
 The expected source entrypoints are:
 
 - `src/reference-kit/controller.mjs`
+- `src/reference-kit/discovery-cli.mjs`
+- `src/reference-kit/discover-reference`
 - `src/reference-kit/run-reference`
 - `src/reference-kit/prepare-results.mjs`
 
@@ -73,12 +75,14 @@ downloaded ZIP:
   python3 "$acceptance_files/safe-extract.py" \
     "$acceptance_files/fault-affinity-live-linux-x64.tar.gz" \
     "$acceptance_kit"
-  "$acceptance_kit/fault-affinity/bin/run-reference" --results-root "$HOME"
+  "$acceptance_kit/fault-affinity/bin/discover-reference" \
+    --results-root "$HOME" --target-cpus 3 --load-cpus 0-1
 )
 ```
 
 The block stops at the first failed command. Its last command is a dry run: it
 validates the candidate and prints a plan without starting the workload.
+The explicit four-CPU layout is an acceptance fixture, not a recommendation.
 `mktemp` creates new, empty directories each time, so an earlier check cannot
 contaminate a later one.
 

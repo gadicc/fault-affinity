@@ -32,6 +32,21 @@ release = {
         },
     },
 }
+if variant != "legacy-valid":
+    release["profiles"] = {
+        "referenceDiscovery": {
+            "id": "reference-loaded-discovery",
+            "version": 1,
+            "protocol": "reference-loaded-discovery-v1",
+            "pgliteVersion": "0.5.4",
+        },
+        "referenceConfirmation": {
+            "id": "load-aba-discovered-confirmation",
+            "version": 1,
+            "pgliteVersion": "0.5.4",
+        },
+    }
+    release["capabilities"] = {"referenceDiscovery": 1}
 if variant == "bad-release":
     release["release"]["tag"] = "v9.9.9"
 elif variant == "runtime-mismatch":
@@ -82,6 +97,14 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
             "fault-affinity/app/src/reference-kit/controller.mjs",
             "// fixture controller\n",
         )
+    if variant != "legacy-valid":
+        add_file(
+            archive,
+            "fault-affinity/app/src/reference-kit/discovery-cli.mjs",
+            "// fixture discovery controller\n",
+        )
+    if variant not in ("legacy-valid", "partial-discovery"):
+        add_file(archive, "fault-affinity/bin/discover-reference", "#!/bin/sh\ntouch WORKLOAD_RAN\n", 0o755)
     add_file(archive, "fault-affinity/bin/run-reference", "#!/bin/sh\ntouch WORKLOAD_RAN\n", 0o755)
     add_file(archive, "fault-affinity/share/prepare-results", "#!/bin/sh\nexit 0\n", 0o755)
     add_file(archive, "fault-affinity/runtime/controller/bin/node", controller_payload, 0o755)
@@ -102,6 +125,14 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
             {"path": "share/prepare-results", "mode": "0755"},
         ],
     }
+    if variant != "legacy-valid":
+        mode_manifest["files"].append(
+            {"path": "app/src/reference-kit/discovery-cli.mjs", "mode": "0644"}
+        )
+    if variant not in ("legacy-valid", "partial-discovery"):
+        mode_manifest["files"].append(
+            {"path": "bin/discover-reference", "mode": "0755"}
+        )
     if variant == "bad-manifest":
         mode_manifest["files"][0]["mode"] = "0666"
     add_file(archive, "fault-affinity/MODE-MANIFEST.json", json.dumps(mode_manifest))

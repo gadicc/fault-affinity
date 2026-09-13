@@ -41,6 +41,7 @@ jobs:
 
       - name: Check shell syntax
         run: |
+          bash -n src/reference-kit/discover-reference
           bash -n src/reference-kit/run-reference
           bash -n packaging/templates/prepare-results
 
@@ -89,6 +90,7 @@ jobs:
             "$RUNNER_TEMP/candidate-smoke"
           "$RUNNER_TEMP/candidate-smoke/fault-affinity/runtime/controller/bin/node" --version
           "$RUNNER_TEMP/candidate-smoke/fault-affinity/runtime/reference/bin/node" --version
+          "$RUNNER_TEMP/candidate-smoke/fault-affinity/bin/discover-reference" --help
           "$RUNNER_TEMP/candidate-smoke/fault-affinity/bin/run-reference" --help
           "$RUNNER_TEMP/candidate-smoke/fault-affinity/share/prepare-results" --help
 

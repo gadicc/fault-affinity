@@ -17,6 +17,7 @@ import {
   PinnedProtocolStateError,
   canonicalProtocolJson,
   createFileStateAdapter,
+  createReadOnlyFileStateAdapter,
 } from "../../diagnose-lib/pinned-protocol.mjs";
 import {
   REFERENCE_DISCOVERY_HISTORY_VERSION,
@@ -188,6 +189,38 @@ export async function withReferenceDiscoveryHistoryStore({
     const directory = ensureHistoryDirectory(collection);
     assertBundleExecutionLeaseHeld(lease);
     const handle = { lease, directory, adapter: createFileStateAdapter(directory) };
+    HANDLES.add(handle);
+    try { return await operation(handle); } finally { HANDLES.delete(handle); }
+  });
+}
+
+export async function withReferenceDiscoveryHistoryReader({
+  collectionDir,
+  flockPath,
+  waitMs = 0,
+}, operation) {
+  if (typeof operation !== "function") fail("reference discovery history operation is required");
+  return withBundleExecutionLease({ bundleDir: collectionDir, flockPath, waitMs }, async (lease) => {
+    assertBundleExecutionLeaseHeld(lease);
+    const collection = validatePrivateDirectory(collectionDir, "reference discovery collection");
+    const directory = path.join(collection, REFERENCE_DISCOVERY_HISTORY_DIRECTORY);
+    let adapter;
+    try {
+      validatePrivateDirectory(directory, "reference discovery history directory");
+      adapter = createReadOnlyFileStateAdapter(directory);
+    } catch (error) {
+      let statError;
+      try { lstatSync(directory); } catch (candidate) { statError = candidate; }
+      if (statError?.code !== "ENOENT") throw error;
+      adapter = Object.freeze({
+        list: () => [],
+        read: () => { throw new PinnedProtocolStateError("history record is missing"); },
+        commit: () => { throw new PinnedProtocolStateError("history reader cannot commit"); },
+        remove: () => { throw new PinnedProtocolStateError("history reader cannot remove"); },
+      });
+    }
+    assertBundleExecutionLeaseHeld(lease);
+    const handle = { lease, directory, adapter };
     HANDLES.add(handle);
     try { return await operation(handle); } finally { HANDLES.delete(handle); }
   });

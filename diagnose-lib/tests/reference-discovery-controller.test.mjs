@@ -50,6 +50,25 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function discoveryReleaseDeclaration() {
+  return {
+    capabilities: { referenceDiscovery: 1 },
+    profiles: {
+      referenceDiscovery: {
+        id: "reference-loaded-discovery",
+        version: 1,
+        protocol: "reference-loaded-discovery-v1",
+        pgliteVersion: "0.5.4",
+      },
+      referenceConfirmation: {
+        id: "load-aba-discovered-confirmation",
+        version: 1,
+        pgliteVersion: "0.5.4",
+      },
+    },
+  };
+}
+
 function topologyFiles({
   online = "0-7",
   cgroup = "0-7",
@@ -373,6 +392,7 @@ test("discovery workloads keep distinct frozen identities and deterministic envi
   const releaseFile = { path: path.join(root, "RELEASE.json"), sha256: "d".repeat(64),
     bytes: "10", mode: 0o644 };
   const identity = collectReferenceDiscoveryIdentity(layout, {
+    release: discoveryReleaseDeclaration(),
     app: treeIdentity(app),
     pglite: treeIdentity(pglite),
     child: { path: child, sha256: sha256(readFileSync(child)) },
@@ -389,6 +409,7 @@ test("discovery workloads keep distinct frozen identities and deterministic envi
 
   writeFileSync(targetNode, "#!/bin/sh\nexit 7\n");
   assert.throws(() => collectReferenceDiscoveryIdentity(layout, {
+    release: discoveryReleaseDeclaration(),
     app: treeIdentity(app), pglite: treeIdentity(pglite),
     child: { path: child, sha256: sha256(readFileSync(child)) },
     executables: {
@@ -402,6 +423,7 @@ test("discovery workloads keep distinct frozen identities and deterministic envi
   chmodSync(targetNode, 0o755);
   writeFileSync(path.join(app, "changed-after-verification.txt"), "changed\n");
   assert.throws(() => collectReferenceDiscoveryIdentity(layout, {
+    release: discoveryReleaseDeclaration(),
     app: { sha256: identity.appTreeSha256 }, pglite: treeIdentity(pglite),
     child: { path: child, sha256: sha256(readFileSync(child)) },
     executables: {
@@ -412,6 +434,19 @@ test("discovery workloads keep distinct frozen identities and deterministic envi
     },
   }, resolveReferenceDiscoveryWorkloads(layout, environment, Buffer.from(key)), releaseFile),
   /application tree changed/);
+
+  assert.throws(() => collectReferenceDiscoveryIdentity(layout, {
+    release: { ...discoveryReleaseDeclaration(), capabilities: {} },
+    app: treeIdentity(app), pglite: treeIdentity(pglite),
+    child: { path: child, sha256: sha256(readFileSync(child)) },
+    executables: {
+      controller: executableRecord(controllerNode, "v24.21.0"),
+      target: executableRecord(targetNode, "v25.2.1"),
+      taskset: executableRecord("/usr/bin/taskset"),
+      yes: executableRecord("/usr/bin/yes"),
+    },
+  }, resolveReferenceDiscoveryWorkloads(layout, environment, Buffer.from(key)), releaseFile),
+  /profiles or capability are invalid/);
 });
 
 test("environment binding key is stable for one verified kit and boot context", () => {
@@ -505,7 +540,7 @@ test("dry planning creates nothing, zeros its binding key, and prints live comma
   const rendered = renderReferenceDiscoveryDryRun(plan);
   assert.match(rendered, /Nothing was executed and no result directory was created/);
   assert.match(rendered, /To run this exact selection/);
-  assert.match(rendered, /discover-reference/);
+  assert.ok(rendered.includes(path.join(kitRoot, "bin/discover-reference")));
   assert.match(rendered, /--expect-preview' '[0-9a-f]{64}/);
   assert.match(rendered, /Measured concurrency: 1 PGlite process at a time/);
 

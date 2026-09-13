@@ -1,0 +1,49 @@
+#!/bin/sh
+set -eu
+PATH=/usr/bin:/bin
+export PATH
+
+if [ "$(/usr/bin/id -u)" -eq 0 ]; then
+  printf 'error: reference kit must not run as root\n' >&2
+  exit 2
+fi
+if [ "$(/usr/bin/uname -s)" != Linux ]; then
+  printf 'error: reference kit requires Linux\n' >&2
+  exit 2
+fi
+if [ "$(/usr/bin/uname -m)" != x86_64 ]; then
+  printf 'error: reference kit requires x86-64\n' >&2
+  exit 2
+fi
+
+for name in NODE_OPTIONS NODE_PATH LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG \
+  DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH PGLITE_LOAD_ABA_NODE_BIN \
+  PGLITE_LOAD_ABA_CONTROLLER PGLITE_LOAD_ABA_OUT_DIR PGLITE_LOAD_ABA_ALLOWED_CPUS
+do
+  eval "present=\${${name}+yes}"
+  if [ "${present:-}" = yes ]; then
+    printf 'error: refusing injection-capable environment variable %s\n' "$name" >&2
+    exit 2
+  fi
+done
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+kit_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+node="$kit_root/runtime/controller/bin/node"
+controller="$kit_root/app/src/reference-kit/discovery-cli.mjs"
+
+if [ ! -x "$node" ]; then
+  printf 'error: bundled controller runtime is missing or not executable\n' >&2
+  exit 2
+fi
+if [ ! -f "$controller" ]; then
+  printf 'error: reference discovery controller is missing\n' >&2
+  exit 2
+fi
+if [ -z "${HOME:-}" ] || [ "${HOME#/}" = "$HOME" ]; then
+  printf 'error: HOME must be an absolute path\n' >&2
+  exit 2
+fi
+
+exec env -i PATH=/usr/bin:/bin HOME="$HOME" LANG="${LANG:-C.UTF-8}" \
+  TMPDIR="${TMPDIR:-/tmp}" "$node" "$controller" "$@"

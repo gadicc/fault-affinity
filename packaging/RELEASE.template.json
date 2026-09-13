@@ -12,6 +12,22 @@
     "version": 1,
     "pgliteVersion": "0.5.4"
   },
+  "profiles": {
+    "referenceDiscovery": {
+      "id": "reference-loaded-discovery",
+      "version": 1,
+      "protocol": "reference-loaded-discovery-v1",
+      "pgliteVersion": "0.5.4"
+    },
+    "referenceConfirmation": {
+      "id": "load-aba-discovered-confirmation",
+      "version": 1,
+      "pgliteVersion": "0.5.4"
+    }
+  },
+  "capabilities": {
+    "referenceDiscovery": 1
+  },
   "runtimes": {
     "controller": {
       "version": "v24.21.0",

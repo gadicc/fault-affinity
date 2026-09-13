@@ -59,6 +59,9 @@ import {
 } from "../controlled-load-session.mjs";
 
 const LAUNCHER = fileURLToPath(new URL("../../src/reference-kit/run-reference", import.meta.url));
+const DISCOVERY_LAUNCHER = fileURLToPath(
+  new URL("../../src/reference-kit/discover-reference", import.meta.url),
+);
 
 const directories = [];
 afterEach(() => {
@@ -282,6 +285,34 @@ test("controller and target environments reject injection and launch from an all
   });
   assert.equal(shellGuard.status, 2);
   assert.match(shellGuard.stderr, /NODE_OPTIONS/);
+});
+
+test("discovery launcher fixes PATH before resolving system utilities", () => {
+  const fake = directory("reference-discovery-path-");
+  const kit = path.join(fake, "kit");
+  const marker = path.join(fake, "ambient-path-used");
+  const launched = path.join(fake, "bundled-runtime-used");
+  mkdirSync(path.join(kit, "bin"), { recursive: true });
+  mkdirSync(path.join(kit, "runtime/controller/bin"), { recursive: true });
+  mkdirSync(path.join(kit, "app/src/reference-kit"), { recursive: true });
+  writeFileSync(path.join(kit, "bin/discover-reference"), readFileSync(DISCOVERY_LAUNCHER));
+  chmodSync(path.join(kit, "bin/discover-reference"), 0o755);
+  writeFileSync(path.join(kit, "runtime/controller/bin/node"),
+    `#!/bin/sh\n/usr/bin/touch '${launched}'\nexit 0\n`);
+  chmodSync(path.join(kit, "runtime/controller/bin/node"), 0o755);
+  writeFileSync(path.join(kit, "app/src/reference-kit/discovery-cli.mjs"), "// fixture\n");
+  for (const utility of ["dirname", "env"]) {
+    const executable = path.join(fake, utility);
+    writeFileSync(executable, `#!/bin/sh\n/usr/bin/touch '${marker}'\nexit 99\n`);
+    chmodSync(executable, 0o755);
+  }
+  const result = spawnSync("/bin/sh", [path.join(kit, "bin/discover-reference"), "--help"], {
+    encoding: "utf8",
+    env: { HOME: fake, PATH: fake, LANG: "C.UTF-8" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(launched), true);
+  assert.equal(existsSync(marker), false);
 });
 
 test("only an actual SIGSEGV is a target fault; exit 139 is an ordinary workload failure", () => {

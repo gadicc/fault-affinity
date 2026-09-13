@@ -16,6 +16,7 @@ import {
   publishReferenceDiscoveryHistoryStart,
   publishReferenceDiscoveryHistoryTerminal,
   readReferenceDiscoveryHistory,
+  withReferenceDiscoveryHistoryReader,
   withReferenceDiscoveryHistoryStore,
 } from "./discovery-history-store.mjs";
 import { runReferenceDiscoverySessionProcess } from "./discovery-session-client.mjs";
@@ -64,8 +65,11 @@ function checkpoint(coordinator) {
   }
 }
 
-async function historySnapshot(collectionDir, plan, dependencies) {
-  const withHistory = dependencies.withHistoryStore ?? withReferenceDiscoveryHistoryStore;
+async function historySnapshot(collectionDir, plan, dependencies, { readOnly = false } = {}) {
+  const withHistory = readOnly
+    ? dependencies.withHistoryReader ?? dependencies.withHistoryStore ??
+      withReferenceDiscoveryHistoryReader
+    : dependencies.withHistoryStore ?? withReferenceDiscoveryHistoryStore;
   const readHistory = dependencies.readHistory ?? readReferenceDiscoveryHistory;
   return withHistory({
     collectionDir,
@@ -143,7 +147,9 @@ function reconciledHistoryTerminal(plan, start, unixMs) {
   };
 }
 
-async function readChild(plan, session, workloads, collectionDir, dependencies) {
+async function readChild(plan, session, workloads, collectionDir, dependencies, {
+  readOnly = false,
+} = {}) {
   const reader = dependencies.readChild ?? readReferenceDiscoveryChild;
   return reader({
     plan,
@@ -152,20 +158,24 @@ async function readChild(plan, session, workloads, collectionDir, dependencies) 
     auxiliary: workloads.auxiliary,
     bundleDir: path.join(collectionDir, session.directory),
     ...(dependencies.flockPath === undefined ? {} : { flockPath: dependencies.flockPath }),
+    readOnly,
   });
 }
 
 async function deriveReportInsideCoordinator(plan, collectionDir, coordinator, dependencies, {
   publishWhenFinal = false,
+  readOnly = false,
 } = {}) {
   const revalidate = dependencies.revalidateContext ?? revalidateReferenceDiscoveryContext;
   const context = await revalidate(plan, dependencies.revalidationDependencies ?? {});
   checkpoint(coordinator);
-  const history = await historySnapshot(collectionDir, plan, dependencies);
+  const history = await historySnapshot(collectionDir, plan, dependencies, { readOnly });
   checkpoint(coordinator);
   const children = [];
   for (const session of plan.schedule.sessions) {
-    children.push(await readChild(plan, session, context.workloads, collectionDir, dependencies));
+    children.push(await readChild(plan, session, context.workloads, collectionDir, dependencies, {
+      readOnly,
+    }));
     checkpoint(coordinator);
   }
   const buildReport = dependencies.buildReport ?? buildReferenceDiscoveryReport;
@@ -190,6 +200,7 @@ async function deriveReportInsideCoordinator(plan, collectionDir, coordinator, d
       collectionDir,
       report,
       ...(dependencies.flockPath === undefined ? {} : { flockPath: dependencies.flockPath }),
+      readOnly,
     });
     checkpoint(coordinator);
   }
@@ -388,11 +399,13 @@ export async function deriveReferenceDiscoveryReport(collectionDir, dependencies
   const readPlan = dependencies.readPlan ?? readReferenceDiscoveryPlan;
   const plan = await readPlan(collectionDir, {
     ...(dependencies.flockPath === undefined ? {} : { flockPath: dependencies.flockPath }),
+    readOnly: true,
   });
   const withCoordinator = dependencies.withCoordinator ?? withReferenceDiscoveryCoordinator;
   return withCoordinator({
     collectionDir,
     ...(dependencies.flockPath === undefined ? {} : { flockPath: dependencies.flockPath }),
+    readOnly: true,
   }, async (coordinator) => {
     checkpoint(coordinator);
     const derived = await deriveReportInsideCoordinator(
@@ -400,6 +413,7 @@ export async function deriveReferenceDiscoveryReport(collectionDir, dependencies
       collectionDir,
       coordinator,
       dependencies,
+      { readOnly: true },
     );
     checkpoint(coordinator);
     return Object.freeze({ plan, collectionDir, report: derived.report });

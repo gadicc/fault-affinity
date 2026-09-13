@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import {
   closeSync,
+  existsSync,
   fstatSync,
   linkSync,
   mkdirSync,
@@ -45,6 +46,7 @@ import {
 import {
   publishReferenceDiscoveryHistoryStart,
   readReferenceDiscoveryHistory,
+  withReferenceDiscoveryHistoryReader,
   withReferenceDiscoveryHistoryStore,
 } from "../../src/reference-kit/discovery-history-store.mjs";
 import {
@@ -217,6 +219,23 @@ test("collection publication is private, canonical, immutable, and resumable", a
   changed.resources.memAvailableBytes = (5n * 1024n ** 3n).toString();
   changed.resources.effectiveHeadroomBytes = changed.resources.memAvailableBytes;
   await assert.rejects(createReferenceDiscoveryCollection(changed), /different content/);
+});
+
+test("read-only collection and history inspection do not repair or create state", async () => {
+  const root = temporaryDirectory();
+  const { plan, collectionDir } = fixture(root);
+  await createReferenceDiscoveryCollection(plan);
+  const stranded = path.join(collectionDir,
+    `.${REFERENCE_DISCOVERY_PLAN_FILE}.99999999.0123456789abcdef.ready.tmp`);
+  writeFileSync(stranded, canonicalReferenceDiscoveryPlanLine(plan), { mode: 0o600 });
+
+  assert.deepEqual(await readReferenceDiscoveryPlan(collectionDir, { readOnly: true }), plan);
+  assert.equal(existsSync(stranded), true);
+  assert.equal(existsSync(path.join(collectionDir, "history")), false);
+  const history = await withReferenceDiscoveryHistoryReader({ collectionDir },
+    (store) => readReferenceDiscoveryHistory(store, plan));
+  assert.deepEqual(history.records, []);
+  assert.equal(existsSync(path.join(collectionDir, "history")), false);
 });
 
 for (const stage of ["writing", "ready", "linked"]) {
