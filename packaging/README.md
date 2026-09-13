@@ -14,6 +14,10 @@ archive with `MODE-MANIFEST.json`, rather than as loose Actions artifact files.
 The expected source entrypoints are:
 
 - `src/reference-kit/controller.mjs`
+- `src/reference-kit/confirmation-cli.mjs`
+- `src/reference-kit/discovery-cli.mjs`
+- `src/reference-kit/confirm-reference`
+- `src/reference-kit/discover-reference`
 - `src/reference-kit/run-reference`
 - `src/reference-kit/prepare-results.mjs`
 
@@ -73,14 +77,22 @@ downloaded ZIP:
   python3 "$acceptance_files/safe-extract.py" \
     "$acceptance_files/fault-affinity-live-linux-x64.tar.gz" \
     "$acceptance_kit"
-  "$acceptance_kit/fault-affinity/bin/run-reference" --results-root "$HOME"
+  "$acceptance_kit/fault-affinity/bin/discover-reference" \
+    --results-root "$HOME" --target-cpus 3 --load-cpus 0-1
 )
 ```
 
 The block stops at the first failed command. Its last command is a dry run: it
 validates the candidate and prints a plan without starting the workload.
+The explicit four-CPU layout is an acceptance fixture, not a recommendation.
 `mktemp` creates new, empty directories each time, so an earlier check cannot
 contaminate a later one.
+
+The packaged `prepare-results` command accepts the fixed reference result, an
+adaptive confirmation, or a stable guided-discovery collection. It takes the
+relevant exclusive lease, rederives discovery reports from authoritative child
+bundles, and labels partial discovery exports
+`incomplete-non-selection-evidence`.
 
 ## Automate the Ubuntu live-image boundary locally
 
@@ -92,8 +104,8 @@ bundled runtime versions, launcher help, result-preparer help, and a four-CPU
 dry run that creates no result content. It never supplies live confirmation or
 starts PGlite, WebAssembly churn, or load workers.
 
-Install QEMU, xorriso, and e2fsprogs on the Linux host, then run from the
-repository root with a new output path:
+Install QEMU, xorriso, e2fsprogs, and util-linux (`prlimit`) on the Linux host,
+then run from the repository root with a new output path:
 
 ```sh
 npm run acceptance:live-iso -- \
@@ -105,6 +117,9 @@ npm run acceptance:live-iso -- \
 The runner verifies the ISO against `live-iso-lock.json`. It uses KVM when
 available and otherwise falls back to slower TCG emulation. A successful run
 writes `acceptance.json` and the complete `serial.log` to the output directory.
+It gives only the QEMU child process a zero memlock limit. This selects QEMU's
+supported epoll fallback instead of consuming the account-wide locked-memory
+budget while setting up `io_uring`; it does not change the shell or host limit.
 The direct serial boot exercises the exact kernel, initrd, and live filesystem,
 but intentionally skips GRUB, GNOME, Firefox, physical USB behavior, and a
 confirmed diagnostic run.

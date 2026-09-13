@@ -80,6 +80,7 @@ import {
   PinnedProtocolStateError,
   canonicalProtocolJson,
   createFileStateAdapter,
+  createReadOnlyFileStateAdapter,
 } from "./pinned-protocol.mjs";
 import {
   WORKLOAD_CAPABILITIES,
@@ -847,9 +848,11 @@ function expectedStateDirectories(manifest) {
 async function validateStateRootInventory(
   stateRoot,
   manifest,
-  { allowMissing = false } = {},
+  { allowMissing = false, recoverState = true } = {},
 ) {
-  const names = await createFileStateAdapter(stateRoot).list();
+  const names = await (recoverState
+    ? createFileStateAdapter(stateRoot)
+    : createReadOnlyFileStateAdapter(stateRoot)).list();
   const expected = expectedStateDirectories(manifest);
   requireCondition(Array.isArray(names) && names.length <= expected.length &&
     names.every((name) => expected.includes(name)),
@@ -1024,9 +1027,17 @@ async function readAttemptArmedRecord(adapter, bundle) {
   return parseAttemptArmedRecord(bytes, bundle);
 }
 
-async function readBundleState(resolved, auxiliary, bundleDir) {
+function readStateAdapter(directory, recoverState) {
+  return recoverState
+    ? createFileStateAdapter(directory)
+    : createReadOnlyFileStateAdapter(directory);
+}
+
+async function readBundleState(resolved, auxiliary, bundleDir, { recoverState = true } = {}) {
+  requireCondition(typeof recoverState === "boolean",
+    "schema-3 recovery selection must be boolean");
   const root = validatePrivateDirectory(bundleDir, "schema-3 bundle directory");
-  const adapter = createFileStateAdapter(root);
+  const adapter = readStateAdapter(root, recoverState);
   const names = await listRoot(adapter);
   requireCondition(names.has(SCHEMA3_BUNDLE_FILE), "schema-3 bundle manifest is missing");
   requireCondition(names.has("state"), "schema-3 bundle state directory is missing");
@@ -1041,7 +1052,7 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
   "derived campaign reports are allowed only in schema-3 manifest-v7 bundles");
   const stateRoot = validatePrivateDirectory(path.join(root, "state"),
     "schema-3 bundle state directory");
-  await validateStateRootInventory(stateRoot, manifest);
+  await validateStateRootInventory(stateRoot, manifest, { recoverState });
   let baseline;
   if ([
     SCHEMA3_BUNDLE_MANIFEST_V2_VERSION,
@@ -1051,7 +1062,10 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
   ].includes(manifest.version)) {
     const baselineStateDir = validatePrivateDirectory(path.join(stateRoot, "baseline"),
       "schema-3 baseline state directory");
-    baseline = await readBaselinePhaseStore({ resolved, stateDir: baselineStateDir });
+    baseline = await readBaselinePhaseStore({
+      resolved,
+      stateAdapter: readStateAdapter(baselineStateDir, recoverState),
+    });
     requireCondition(canonicalProtocolJson(baseline.manifest) ===
       canonicalProtocolJson(manifest.baseline.manifest),
     "schema-3 baseline state belongs to a different phase manifest");
@@ -1064,7 +1078,10 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
   ].includes(manifest.version)) {
     const groupStateDir = validatePrivateDirectory(path.join(stateRoot, "groups"),
       "schema-3 group state directory");
-    groups = await readGroupPhaseStore({ resolved, stateDir: groupStateDir });
+    groups = await readGroupPhaseStore({
+      resolved,
+      stateAdapter: readStateAdapter(groupStateDir, recoverState),
+    });
     requireCondition(canonicalProtocolJson(groups.manifest) ===
       canonicalProtocolJson(manifest.groups.manifest),
     "schema-3 group state belongs to a different phase manifest");
@@ -1078,7 +1095,7 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
     );
     pinnedConcurrent = await readPinnedConcurrentPhaseStore({
       resolved,
-      stateDir: pinnedConcurrentStateDir,
+      stateAdapter: readStateAdapter(pinnedConcurrentStateDir, recoverState),
     });
     requireCondition(canonicalProtocolJson(pinnedConcurrent.manifest) ===
       canonicalProtocolJson(manifest.pinnedConcurrent.manifest),
@@ -1094,7 +1111,7 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
     controlledLoad = await readControlledLoadPhaseStore({
       measured: resolved,
       auxiliary,
-      stateDir: controlledLoadStateDir,
+      stateAdapter: readStateAdapter(controlledLoadStateDir, recoverState),
     });
     requireCondition(canonicalProtocolJson(controlledLoad.manifest) ===
       canonicalProtocolJson(manifest.controlledLoad.manifest),
@@ -1108,7 +1125,7 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
     );
     debuggerPhase = await readDebuggerPhaseStore({
       resolved,
-      stateDir: debuggerStateDir,
+      stateAdapter: readStateAdapter(debuggerStateDir, recoverState),
     });
     requireCondition(canonicalProtocolJson(debuggerPhase.manifest) ===
       canonicalProtocolJson(manifest.debugger.manifest),
@@ -1116,7 +1133,10 @@ async function readBundleState(resolved, auxiliary, bundleDir) {
   }
   const exactCpuStateDir = validatePrivateDirectory(path.join(stateRoot, "exact-cpu"),
     "schema-3 exact-CPU state directory");
-  const exactCpu = await readExactCpuPhaseStore({ resolved, stateDir: exactCpuStateDir });
+  const exactCpu = await readExactCpuPhaseStore({
+    resolved,
+    stateAdapter: readStateAdapter(exactCpuStateDir, recoverState),
+  });
   requireCondition(canonicalProtocolJson(exactCpu.manifest) ===
     canonicalProtocolJson(manifest.exactCpu.manifest),
   "schema-3 exact-CPU state belongs to a different phase manifest");
@@ -1287,11 +1307,12 @@ export async function readSchema3Bundle({
   bundleDir,
   flockPath,
   leaseWaitMs = 0,
+  recoverState = true,
 }) {
   return withBundleExecutionLease(
     { bundleDir, flockPath, waitMs: leaseWaitMs },
     async (lease) => {
-      const bundle = await readBundleState(resolved, auxiliary, bundleDir);
+      const bundle = await readBundleState(resolved, auxiliary, bundleDir, { recoverState });
       assertBundleExecutionLeaseHeld(lease);
       return bundle;
     },
@@ -1513,6 +1534,7 @@ export async function runOneSchema3ControlledLoadSession({
   runAttempt,
   startWorkerSet,
   waitInterval,
+  validateBundle,
   attemptOptions,
 }) {
   const options = validateAttemptOptions(attemptOptions,
@@ -1523,6 +1545,8 @@ export async function runOneSchema3ControlledLoadSession({
     "schema-3 startWorkerSet must be a function");
   requireCondition(waitInterval === undefined || typeof waitInterval === "function",
     "schema-3 waitInterval must be a function");
+  requireCondition(validateBundle === undefined || typeof validateBundle === "function",
+    "schema-3 validateBundle must be a function");
   return withBundleExecutionLease({ bundleDir, flockPath, waitMs: leaseWaitMs }, async (lease) => {
     let bundle = await readBundleState(resolved, auxiliary, bundleDir);
     requireCondition([
@@ -1531,6 +1555,8 @@ export async function runOneSchema3ControlledLoadSession({
     ].includes(bundle.manifest.version) &&
       bundle.controlledLoad !== undefined,
     "schema-3 bundle manifest does not bind a controlled-load phase");
+    assertBundleExecutionLeaseHeld(lease);
+    if (validateBundle !== undefined) validateBundle(bundle);
     assertBundleExecutionLeaseHeld(lease);
     const armedState = await armSchema3ScheduledUnit(
       bundle, bundleDir, "controlled-load-aba");

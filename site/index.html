@@ -45,10 +45,17 @@ bash fault-affinity-run</code></pre>
         to Terminal before running the final command.
       </p>
       <p>
-        When extraction finishes, copy the safe-preview command it prints.
-        That command only shows the fixed case-study plan; it does not discover
-        a suspect CPU. Read the storage and safety guide before using the
-        separate <code>--yes</code> confirmation.
+        When extraction finishes, check the safe-preview command it prints. A
+        guided release prints <code>discover-reference</code>; an older release
+        may print the fixed <code>run-reference</code> comparison instead. The
+        guided preview inspects the CPU layout and proposes a short screen. It
+        creates no results and starts no workload. Read the storage and safety
+        guide before using the separate <code>--yes</code> command.
+      </p>
+      <p>
+        A confirmed guided run needs active storage on an ext4 USB drive or
+        Linux partition. A FAT, exFAT, or NTFS drive can hold the final archive
+        for Windows, but not the active journal.
       </p>
       <p class="warning">
         A live fault-reproduction workload can expose instability. Close other

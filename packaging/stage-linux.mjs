@@ -188,6 +188,7 @@ async function main() {
         flag: "wx", mode: 0o644,
       }));
 
+    chmodSync(path.join(kitRoot, "bin/discover-reference"), 0o755);
     chmodSync(path.join(kitRoot, "bin/run-reference"), 0o755);
     writeModeManifest(kitRoot, path.join(kitRoot, "MODE-MANIFEST.json"));
     const uncompressed = path.join(options.outputDirectory,

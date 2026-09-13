@@ -33,6 +33,7 @@ import { validateRecoveryRunProvenance } from "../validate-recovery-run.mjs";
 import {
   buildGuestStartCommand,
   buildQemuArguments,
+  buildQemuLaunch,
   parseLiveIsoAcceptanceArguments,
 } from "../live-iso-acceptance.mjs";
 import {
@@ -131,11 +132,11 @@ test("accepted remote protections preserve promotion, release, tag, and recovery
 
 test("accepted live ISO evidence is bound to the pinned image and a harmless dry run", () => {
   const evidence = JSON.parse(readFileSync(path.join(repositoryRoot,
-    "packaging/acceptance/live-iso-20260912.json"), "utf8"));
+    "packaging/acceptance/live-iso-20260913.json"), "utf8"));
   const iso = JSON.parse(readFileSync(path.join(repositoryRoot,
     "packaging/live-iso-lock.json"), "utf8"));
   const transcript = readFileSync(path.join(repositoryRoot,
-    "packaging/acceptance/live-iso-20260912-transcript.txt"), "utf8");
+    "packaging/acceptance/live-iso-20260913-transcript.txt"), "utf8");
   assert.equal(evidence.schemaVersion, 1);
   assert.equal(evidence.status, "passed");
   assert.deepEqual(evidence.iso, {
@@ -160,6 +161,9 @@ test("accepted live ISO evidence is bound to the pinned image and a harmless dry
     timeoutSeconds: 900,
     acceleration: "kvm",
     qemuVersion: "QEMU emulator version 11.1.1",
+    launcher: "prlimit",
+    qemuProcessMemlockBytes: 0,
+    prlimitVersion: "prlimit from util-linux 2.42.3",
   });
   assert.deepEqual(evidence.checks, [
     "pinned ISO identity",
@@ -173,8 +177,8 @@ test("accepted live ISO evidence is bound to the pinned image and a harmless dry
     "ext4-backed dry run",
     "dry run created no result content",
   ]);
-  assert.match(transcript, /Fault Affinity reference dry run/);
-  assert.match(transcript, /Nothing was executed\./);
+  assert.match(transcript, /Fault Affinity guided reference screen — dry run/);
+  assert.match(transcript, /Nothing was executed and no result directory was created\./);
   assert.match(transcript, /FAULT_AFFINITY_VM_ACCEPTANCE_OK/);
   assert.match(transcript, /FAULT_AFFINITY_VM_STATUS=0/);
   assert.doesNotMatch(transcript, /machineid|bootid|sessionid/);
@@ -565,6 +569,10 @@ test("dev snapshot support is self-contained and remains harmless", () => {
   assert.match(guest, /sha256sum --check SHA256SUMS/);
   assert.match(guest, /safe-extract\.py/);
   assert.match(guest, /before_inventory[\s\S]+after_inventory/);
+  assert.equal(guest.match(/sudo \/usr\/bin\/find/g)?.length, 1);
+  assert.match(guest, /find[\s\S]+> "\$inventory_file" \|\|/);
+  assert.match(guest, /sort "\$inventory_file" > "\$sorted_inventory_file" \|\|/);
+  assert.match(guest, /if plan=\$\([\s\S]+else[\s\S]+printf '%s\\n' "\$plan" >&2/);
   assert.match(guest, /--dry-run/);
   assert.doesNotMatch(guest, /--yes|child\.mjs|yes-load|PGlite/);
 
@@ -622,6 +630,17 @@ test("live ISO acceptance builds a serial-only QEMU dry-run boundary", () => {
     argument.includes("readonly=on")));
   assert.ok(qemu.some((argument) => argument.includes("results.ext4") &&
     argument.includes("if=virtio")));
+  const launch = buildQemuLaunch(qemu);
+  assert.equal(launch.program, "prlimit");
+  assert.deepEqual(launch.arguments.slice(0, 4), [
+    "--memlock=0:0",
+    "--",
+    "qemu-system-x86_64",
+    "-name",
+  ]);
+  assert.deepEqual(launch.arguments.slice(3), qemu);
+  assert.throws(() => buildQemuLaunch(["-m", 4096]),
+    /QEMU arguments must be an array of strings/);
   const guestStart = buildGuestStartCommand();
   assert.match(guestStart, /trap .*FAULT_AFFINITY_VM_STATUS/);
   assert.doesNotMatch(guestStart, /trap - EXIT|--yes|child\.mjs|yes-load|PGlite/);

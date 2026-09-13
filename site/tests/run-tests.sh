@@ -22,16 +22,27 @@ make_fixture() {
 
 expect_success() {
   name=$1
+  capability=${2:-discovery}
   mkdir -p "$temporary/work/$name"
   (
     cd "$temporary/work/$name"
     FAULT_AFFINITY_TEST_RELEASE_DIR="$temporary/releases/$name" \
       FAULT_AFFINITY_TEST_TAG=v0.1.0 \
+      FAULT_AFFINITY_TEST_ALLOWED_CPUS=0-8,19 \
       bash "$bootstrap" --version v0.1.0 >output 2>&1
     test -f fault-affinity-v0.1.0/RELEASE.json
     test -x fault-affinity-v0.1.0/bin/run-reference
     test ! -e WORKLOAD_RAN
     grep -q "No workload was started" output
+    if [ "$capability" = discovery ]; then
+      test -x fault-affinity-v0.1.0/bin/discover-reference
+      test -x fault-affinity-v0.1.0/bin/confirm-reference
+      grep -q -- '/bin/discover-reference.*--results-root "$HOME" --dry-run' output
+    else
+      test ! -e fault-affinity-v0.1.0/bin/discover-reference
+      grep -q 'older snapshot has the fixed reference runner only' output
+      grep -q -- '/bin/run-reference.*--target-cpu 19.*--load-cpus 0,1,2,3,4,5,6,7' output
+    fi
   )
   passes=$((passes + 1))
 }
@@ -55,6 +66,23 @@ expect_failure() {
 make_fixture valid valid
 expect_success valid
 
+make_fixture legacy-valid legacy-valid
+expect_success legacy-valid legacy
+
+make_fixture partial-discovery partial-discovery
+expect_failure partial-discovery
+
+make_fixture partial-confirmation partial-confirmation
+expect_failure partial-confirmation
+
+for variant in \
+  declaration-only partial-capability boolean-capability \
+  guided-launcher-wrong-type guided-launcher-wrong-mode guided-source-wrong-mode
+do
+  make_fixture "$variant" "$variant"
+  expect_failure "$variant"
+done
+
 mkdir -p "$temporary/work/limited-preview"
 (
   cd "$temporary/work/limited-preview"
@@ -62,8 +90,8 @@ mkdir -p "$temporary/work/limited-preview"
     FAULT_AFFINITY_TEST_TAG=v0.1.0 \
     FAULT_AFFINITY_TEST_ALLOWED_CPUS=4-7 \
     bash "$bootstrap" --version v0.1.0 >output 2>&1
-  grep -q -- '--controller-cpu 6 --target-cpu 7 --load-cpus 4,5' output
-  grep -q 'compatibility preview is not a target recommendation' output
+  grep -q -- '/bin/discover-reference.*--results-root "$HOME" --dry-run' output
+  grep -q 'inspects the machine and proposes CPU roles' output
   test ! -e WORKLOAD_RAN
 )
 passes=$((passes + 1))
@@ -75,8 +103,8 @@ mkdir -p "$temporary/work/case-preview"
     FAULT_AFFINITY_TEST_TAG=v0.1.0 \
     FAULT_AFFINITY_TEST_ALLOWED_CPUS=0-8,19 \
     bash "$bootstrap" --version v0.1.0 >output 2>&1
-  grep -q -- '--dry-run --controller-cpu 8 --target-cpu 19 --load-cpus 0,1,2,3,4,5,6,7' output
-  grep -q 'fixed CPU 19 / load 0-7 case-study layout' output
+  grep -q -- '/bin/discover-reference.*--results-root "$HOME" --dry-run' output
+  test "$(grep -c 'CPU 19' output || true)" -eq 0
   test ! -e WORKLOAD_RAN
 )
 passes=$((passes + 1))
@@ -88,8 +116,7 @@ mkdir -p "$temporary/work/two-cpu-preview"
     FAULT_AFFINITY_TEST_TAG=v0.1.0 \
     FAULT_AFFINITY_TEST_ALLOWED_CPUS=4-5 \
     bash "$bootstrap" --version v0.1.0 >output 2>&1
-  grep -q 'fewer than three schedulable CPUs' output
-  grep -q -- '/bin/run-reference.*--help' output
+  grep -q -- '/bin/discover-reference.*--results-root "$HOME" --dry-run' output
   test ! -e WORKLOAD_RAN
 )
 passes=$((passes + 1))

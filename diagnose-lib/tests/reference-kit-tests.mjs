@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -26,6 +27,7 @@ import {
   assertSafeAmbientEnvironment,
   collectMachineMetadata,
   executeReference,
+  executeReferenceProfile,
   executableIdentity,
   inspectOutputStorage,
   parseCpuList,
@@ -38,6 +40,8 @@ import {
   validateReleaseIdentity,
   validateReferenceHost,
 } from "../../src/reference-kit/controller.mjs";
+import { REFERENCE_CONFIRMATION_PROFILE } from
+  "../../src/reference-kit/discovery-controller.mjs";
 import {
   PrepareResultsError,
   RESULT_FILES,
@@ -59,6 +63,15 @@ import {
 } from "../controlled-load-session.mjs";
 
 const LAUNCHER = fileURLToPath(new URL("../../src/reference-kit/run-reference", import.meta.url));
+const DISCOVERY_LAUNCHER = fileURLToPath(
+  new URL("../../src/reference-kit/discover-reference", import.meta.url),
+);
+const CONFIRMATION_LAUNCHER = fileURLToPath(
+  new URL("../../src/reference-kit/confirm-reference", import.meta.url),
+);
+const PREPARE_LAUNCHER = fileURLToPath(
+  new URL("../../packaging/templates/prepare-results", import.meta.url),
+);
 
 const directories = [];
 afterEach(() => {
@@ -189,6 +202,37 @@ test("execution applies the injectable host and output-capacity guards before cr
   })), /active results require a Unix filesystem/);
 });
 
+test("persistent confirmation admission refuses unknown storage before creating output", async () => {
+  const root = directory("reference-confirmation-storage-guard-");
+  const outputName = "reference-confirmation-20260913T200005Z-storage";
+  await assert.rejects(executeReferenceProfile({
+    dryRun: false,
+    yes: true,
+    resultsRoot: root,
+    outputName,
+    targetCpu: 3,
+    controllerCpu: 4,
+    loadCpus: [0, 1, 2],
+    attemptsPerLeg: REFERENCE_CONFIRMATION_PROFILE.attemptsPerLeg,
+  }, {
+    formatVersion: 2,
+    profile: REFERENCE_CONFIRMATION_PROFILE,
+    requirePersistentStorage: true,
+    planExtra: { confirmation: { version: 1 } },
+  }, harmlessDependencies({
+    inspectStorage: () => ({
+      availableBytes: String(1024 * 1024 * 1024),
+      minimumRequiredBytes: String(64 * 1024 * 1024),
+      mountPoint: "/mnt/results",
+      filesystemType: "ext4",
+      source: "/dev/loop0",
+      classification: "unknown",
+      warning: "WARNING: fixture storage is ephemeral.",
+    }),
+  })), (error) => error.code === "REFERENCE_RESULTS_FILESYSTEM_UNSUPPORTED");
+  assert.equal(existsSync(path.join(root, outputName)), false);
+});
+
 test("storage inspection records capacity and warns without failing on uncertain persistence", () => {
   const persistent = inspectOutputStorage("/media/ubuntu/USB/results", {
     statfs: () => ({ bavail: 1000n, bsize: 4096n }),
@@ -282,6 +326,90 @@ test("controller and target environments reject injection and launch from an all
   });
   assert.equal(shellGuard.status, 2);
   assert.match(shellGuard.stderr, /NODE_OPTIONS/);
+});
+
+test("discovery launcher fixes PATH before resolving system utilities", () => {
+  const fake = directory("reference-discovery-path-");
+  const kit = path.join(fake, "kit");
+  const marker = path.join(fake, "ambient-path-used");
+  const launched = path.join(fake, "bundled-runtime-used");
+  mkdirSync(path.join(kit, "bin"), { recursive: true });
+  mkdirSync(path.join(kit, "runtime/controller/bin"), { recursive: true });
+  mkdirSync(path.join(kit, "app/src/reference-kit"), { recursive: true });
+  writeFileSync(path.join(kit, "bin/discover-reference"), readFileSync(DISCOVERY_LAUNCHER));
+  chmodSync(path.join(kit, "bin/discover-reference"), 0o755);
+  writeFileSync(path.join(kit, "runtime/controller/bin/node"),
+    `#!/bin/sh\n/usr/bin/touch '${launched}'\nexit 0\n`);
+  chmodSync(path.join(kit, "runtime/controller/bin/node"), 0o755);
+  writeFileSync(path.join(kit, "app/src/reference-kit/discovery-cli.mjs"), "// fixture\n");
+  for (const utility of ["dirname", "env"]) {
+    const executable = path.join(fake, utility);
+    writeFileSync(executable, `#!/bin/sh\n/usr/bin/touch '${marker}'\nexit 99\n`);
+    chmodSync(executable, 0o755);
+  }
+  const result = spawnSync("/bin/sh", [path.join(kit, "bin/discover-reference"), "--help"], {
+    encoding: "utf8",
+    env: { HOME: fake, PATH: fake, LANG: "C.UTF-8" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(launched), true);
+  assert.equal(existsSync(marker), false);
+});
+
+test("confirmation launcher fixes PATH before resolving system utilities", () => {
+  const fake = directory("reference-confirmation-path-");
+  const kit = path.join(fake, "kit");
+  const marker = path.join(fake, "ambient-path-used");
+  const launched = path.join(fake, "bundled-runtime-used");
+  mkdirSync(path.join(kit, "bin"), { recursive: true });
+  mkdirSync(path.join(kit, "runtime/controller/bin"), { recursive: true });
+  mkdirSync(path.join(kit, "app/src/reference-kit"), { recursive: true });
+  writeFileSync(path.join(kit, "bin/confirm-reference"), readFileSync(CONFIRMATION_LAUNCHER));
+  chmodSync(path.join(kit, "bin/confirm-reference"), 0o755);
+  writeFileSync(path.join(kit, "runtime/controller/bin/node"),
+    `#!/bin/sh\n/usr/bin/touch '${launched}'\nexit 0\n`);
+  chmodSync(path.join(kit, "runtime/controller/bin/node"), 0o755);
+  writeFileSync(path.join(kit, "app/src/reference-kit/confirmation-cli.mjs"), "// fixture\n");
+  for (const utility of ["dirname", "env"]) {
+    const executable = path.join(fake, utility);
+    writeFileSync(executable, `#!/bin/sh\n/usr/bin/touch '${marker}'\nexit 99\n`);
+    chmodSync(executable, 0o755);
+  }
+  const result = spawnSync("/bin/sh", [path.join(kit, "bin/confirm-reference"), "--help"], {
+    encoding: "utf8",
+    env: { HOME: fake, PATH: fake, LANG: "C.UTF-8" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(launched), true);
+  assert.equal(existsSync(marker), false);
+});
+
+test("result-preparation launcher fixes PATH before resolving system utilities", () => {
+  const fake = directory("reference-prepare-path-");
+  const kit = path.join(fake, "kit");
+  const marker = path.join(fake, "ambient-path-used");
+  const launched = path.join(fake, "bundled-runtime-used");
+  mkdirSync(path.join(kit, "share"), { recursive: true });
+  mkdirSync(path.join(kit, "runtime/controller/bin"), { recursive: true });
+  mkdirSync(path.join(kit, "app/src/reference-kit"), { recursive: true });
+  writeFileSync(path.join(kit, "share/prepare-results"), readFileSync(PREPARE_LAUNCHER));
+  chmodSync(path.join(kit, "share/prepare-results"), 0o755);
+  writeFileSync(path.join(kit, "runtime/controller/bin/node"),
+    `#!/bin/sh\n/usr/bin/touch '${launched}'\nexit 0\n`);
+  chmodSync(path.join(kit, "runtime/controller/bin/node"), 0o755);
+  writeFileSync(path.join(kit, "app/src/reference-kit/prepare-results.mjs"), "// fixture\n");
+  for (const utility of ["dirname", "env"]) {
+    const executable = path.join(fake, utility);
+    writeFileSync(executable, `#!/bin/sh\n/usr/bin/touch '${marker}'\nexit 99\n`);
+    chmodSync(executable, 0o755);
+  }
+  const result = spawnSync("/bin/sh", [path.join(kit, "share/prepare-results"), "--help"], {
+    encoding: "utf8",
+    env: { HOME: fake, TMPDIR: fake, PATH: fake, LANG: "C.UTF-8" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(launched), true);
+  assert.equal(existsSync(marker), false);
 });
 
 test("only an actual SIGSEGV is a target fault; exit 139 is an ordinary workload failure", () => {
@@ -449,6 +577,165 @@ test("confirmed execution creates a new private leaf and binds the bounded worke
   assert.match(summary, /Timeouts, launch failures, cancellation/);
 });
 
+test("adaptive confirmation uses a distinct bound result profile without changing fixed defaults", async () => {
+  const root = directory("reference-confirmation-live-fixture-");
+  const retainedAuthorizationDirectory = { fd: 19, device: "11", inode: "12" };
+  let authorizationChecks = 0;
+  const requested = {
+    dryRun: false,
+    yes: true,
+    fromDiscovery: "/results/reference-discovery-20260913T120000Z",
+    resultsRoot: root,
+    outputName: "reference-confirmation-20260913T200000Z-test",
+    targetCpu: 3,
+    controllerCpu: 4,
+    loadCpus: [0, 1, 2],
+    attemptsPerLeg: REFERENCE_CONFIRMATION_PROFILE.attemptsPerLeg,
+  };
+  const result = await executeReferenceProfile(requested, {
+    formatVersion: 2,
+    profile: REFERENCE_CONFIRMATION_PROFILE,
+    controllerModule: "/fixture/confirmation-cli.mjs",
+    reexecArgs: () => [],
+    requirePersistentStorage: true,
+    retainedAuthorizationDirectory,
+    assertAuthorizationHeld: () => { authorizationChecks += 1; return true; },
+    planExtra: {
+      confirmation: {
+        version: 1,
+        protocol: "reference-discovery-confirmation-v1",
+        source: { sha256: "a".repeat(64) },
+      },
+    },
+  }, harmlessDependencies({
+    runSession: async ({ manifest, retainedDirectory }) => {
+      assert.equal(manifest.attemptsPerLeg, 20);
+      assert.equal(manifest.warmupMs, 0);
+      assert.equal(manifest.recoveryMs, 15_000);
+      assert.equal(retainedDirectory, retainedAuthorizationDirectory);
+      return {
+        committed: false,
+        reason: "runner-error",
+        stage: "a1",
+        errorCode: "FIXTURE_STOP",
+        attempts: { a1: [], b: [], a2: [] },
+      };
+    },
+  }));
+  assert.equal(result.status, "operational-incomplete");
+  assert.equal(result.plan.profile.id, "load-aba-discovered-confirmation");
+  assert.equal(result.plan.confirmation.source.sha256, "a".repeat(64));
+  assert.deepEqual(JSON.parse(readFileSync(path.join(result.plan.outputLeaf,
+    "result-state.json"), "utf8")), { formatVersion: 2, status: "operational-incomplete" });
+  const progress = readFileSync(path.join(result.plan.outputLeaf, "progress.jsonl"), "utf8")
+    .trim().split("\n").map(JSON.parse);
+  assert.equal(progress[0].profileId, "load-aba-discovered-confirmation");
+  assert.equal(progress[0].formatVersion, 2);
+  assert.ok(authorizationChecks >= 4);
+
+  const fixed = options(root, ["--target-cpu", "3", "--load-cpus", "0-2"]);
+  const fixedDryRun = await executeReference(fixed, harmlessDependencies());
+  assert.deepEqual(fixedDryRun.plan.profile,
+    { ...REFERENCE_PROFILE, loadCpus: [...REFERENCE_PROFILE.loadCpus] });
+  assert.equal(fixedDryRun.plan.formatVersion, REFERENCE_FORMAT_VERSION);
+});
+
+test("confirmation stops a newly started worker set when source ownership is lost at handoff", async () => {
+  const root = directory("reference-confirmation-worker-handoff-");
+  let authorizationChecks = 0;
+  let stopReason = null;
+  let attemptsStarted = false;
+  const result = await executeReferenceProfile({
+    dryRun: false,
+    yes: true,
+    resultsRoot: root,
+    outputName: "reference-confirmation-20260913T200004Z-handoff",
+    targetCpu: 3,
+    controllerCpu: 4,
+    loadCpus: [0, 1, 2],
+    attemptsPerLeg: 1,
+  }, {
+    formatVersion: 2,
+    profile: { ...REFERENCE_CONFIRMATION_PROFILE, attemptsPerLeg: 1 },
+    requirePersistentStorage: true,
+    assertAuthorizationHeld: () => {
+      authorizationChecks += 1;
+      if (authorizationChecks === 6) {
+        throw Object.assign(new Error("source ownership lost at worker handoff"), {
+          code: "BUNDLE_EXECUTION_LEASE_LOST",
+        });
+      }
+      return true;
+    },
+    planExtra: { confirmation: { version: 1 } },
+  }, harmlessDependencies({
+    startWorkerSet: async () => ({
+      stop: async (reason) => { stopReason = reason; return { valid: true }; },
+    }),
+    runSession: async (session) => {
+      await session.startWorkerSet({});
+      attemptsStarted = true;
+    },
+  }));
+  assert.equal(result.status, "operational-incomplete");
+  const records = readFileSync(path.join(result.plan.outputLeaf, "reference.jsonl"), "utf8")
+    .trim().split("\n").map(JSON.parse);
+  assert.equal(records[1].code, "BUNDLE_EXECUTION_LEASE_LOST");
+  assert.equal(stopReason, "session-invalid");
+  assert.equal(attemptsStarted, false);
+});
+
+test("confirmation rechecks source ownership before the post-recovery A2 attempt", async () => {
+  const root = directory("reference-confirmation-recovery-checkpoint-");
+  let ownershipHeld = true;
+  let attemptsStarted = 0;
+  let workerStopped = false;
+  const result = await executeReferenceProfile({
+    dryRun: false,
+    yes: true,
+    resultsRoot: root,
+    outputName: "reference-confirmation-20260913T200005Z-recovery",
+    targetCpu: 3,
+    controllerCpu: 4,
+    loadCpus: [0, 1, 2],
+    attemptsPerLeg: 1,
+  }, {
+    formatVersion: 2,
+    profile: { ...REFERENCE_CONFIRMATION_PROFILE, attemptsPerLeg: 1 },
+    requirePersistentStorage: true,
+    assertAuthorizationHeld: () => {
+      if (!ownershipHeld) {
+        throw Object.assign(new Error("source ownership lost during recovery"), {
+          code: "BUNDLE_EXECUTION_LEASE_LOST",
+        });
+      }
+      return true;
+    },
+    planExtra: { confirmation: { version: 1 } },
+  }, harmlessDependencies({
+    buildAttemptEvidence: () => ({ fixture: true }),
+    runAttempt: async () => { attemptsStarted += 1; return {}; },
+    startWorkerSet: async () => ({
+      stop: async () => { workerStopped = true; return { valid: true }; },
+    }),
+    sessionWaitInterval: async () => { ownershipHeld = false; return true; },
+    runSession: async (session) => {
+      await session.runAttempt({}, {});
+      const worker = await session.startWorkerSet({});
+      await session.runAttempt({}, {});
+      await worker.stop("complete");
+      await session.waitInterval(REFERENCE_CONFIRMATION_PROFILE.recoveryMs, session.signal);
+      await session.runAttempt({}, {});
+    },
+  }));
+  assert.equal(result.status, "operational-incomplete");
+  assert.equal(attemptsStarted, 2);
+  assert.equal(workerStopped, true);
+  const records = readFileSync(path.join(result.plan.outputLeaf, "reference.jsonl"), "utf8")
+    .trim().split("\n").map(JSON.parse);
+  assert.equal(records[1].code, "BUNDLE_EXECUTION_LEASE_LOST");
+});
+
 test("the internal loaded-window deadline is operational-incomplete, while external abort is interrupted", async () => {
   const internalRoot = directory("reference-kit-deadline-");
   let expire;
@@ -540,7 +827,7 @@ async function resultBundle(root, name = "reference-20260910T120000Z-test", stat
     version: 1, id: "reference-load-worker", label: "fixture auxiliary",
     description: "Harmless waiting reference result fixture.", risk: "disruptive",
     command: { executable: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], cwd: root },
-    environment: {}, attempt: { mode: "survive-window", timeoutMs: 60_000,
+    environment: {}, attempt: { mode: "survive-window", timeoutMs: 7 * 24 * 60 * 60 * 1_000,
       termGraceMs: REFERENCE_PROFILE.termGraceMs, killGraceMs: REFERENCE_PROFILE.killGraceMs },
     outcomes: { mappedExits: [], targetSignals: [] }, capabilities: {},
     provenance: { completeness: "complete", files: [] },
@@ -613,6 +900,191 @@ async function resultBundle(root, name = "reference-20260910T120000Z-test", stat
   return bundle;
 }
 
+function confirmationResultBundle(root) {
+  const bundle = path.join(root, "reference-confirmation-20260913T200000Z-test");
+  mkdirSync(bundle, { mode: 0o700 });
+  const kitRoot = path.join(root, "kit");
+  const appRoot = path.join(kitRoot, "app");
+  mkdirSync(appRoot, { recursive: true, mode: 0o700 });
+  const child = path.join(appRoot, "child.mjs");
+  writeFileSync(child, "process.exit(0);\n", { mode: 0o600 });
+  const cpus = parseCpuList(readFileSync("/proc/self/status", "utf8")
+    .match(/^Cpus_allowed_list:\s*(\S+)\s*$/m)[1]);
+  assert.ok(cpus.length >= 3, "confirmation fixture requires three schedulable CPUs");
+  const [targetCpu, loadCpu, controllerCpu] = cpus;
+  const measuredResolved = resolveWorkloadSpec({
+    version: 1, id: "reference-pglite-target-discovery", label: "fixture measured",
+    description: "Harmless finite confirmation fixture.", risk: "high-memory",
+    command: { executable: process.execPath, args: [child], cwd: appRoot }, environment: {},
+    attempt: { mode: "exit", timeoutMs: REFERENCE_CONFIRMATION_PROFILE.attemptTimeoutMs,
+      termGraceMs: REFERENCE_CONFIRMATION_PROFILE.termGraceMs,
+      killGraceMs: REFERENCE_CONFIRMATION_PROFILE.killGraceMs },
+    outcomes: { mappedExits: [], targetSignals: ["SIGSEGV"] }, capabilities: {},
+    provenance: { completeness: "complete", files: [child] },
+  });
+  const auxiliaryResolved = resolveWorkloadSpec({
+    version: 1, id: "reference-guided-yes-load", label: "fixture auxiliary",
+    description: "Harmless waiting confirmation fixture.", risk: "disruptive",
+    command: { executable: "/usr/bin/yes", args: [], cwd: kitRoot },
+    environment: {}, attempt: { mode: "survive-window", timeoutMs: 60 * 60 * 1_000,
+      termGraceMs: REFERENCE_CONFIRMATION_PROFILE.termGraceMs,
+      killGraceMs: REFERENCE_CONFIRMATION_PROFILE.killGraceMs },
+    outcomes: { mappedExits: [], targetSignals: [] }, capabilities: {},
+    provenance: { completeness: "complete", files: [] },
+  });
+  const release = releaseFixture();
+  release.runtimes.reference.sha256 = measuredResolved.command.executable.sha256;
+  release.profiles = {
+    referenceConfirmation: {
+      id: REFERENCE_CONFIRMATION_PROFILE.id,
+      version: REFERENCE_CONFIRMATION_PROFILE.version,
+      pgliteVersion: REFERENCE_CONFIRMATION_PROFILE.pgliteVersion,
+    },
+  };
+  release.capabilities = { referenceConfirmation: 1 };
+  const sourceReleasePath = path.join(kitRoot, "RELEASE.json");
+  const sourceReleaseBytes = Buffer.from(`${JSON.stringify(release)}\n`, "utf8");
+  writeFileSync(sourceReleasePath, sourceReleaseBytes, { mode: 0o644 });
+  const controllerRuntime = {
+    path: path.join(kitRoot, "runtime/controller/bin/node"),
+    sha256: release.runtimes.controller.sha256,
+    bytes: "123",
+    mode: 0o755,
+    version: release.runtimes.controller.version,
+  };
+  const targetRuntime = {
+    ...measuredResolved.command.executable,
+    bytes: String(measuredResolved.command.executable.bytes),
+    version: release.runtimes.reference.version,
+  };
+  const taskset = {
+    path: "/usr/bin/taskset",
+    sha256: "f".repeat(64),
+    bytes: "456",
+    mode: 0o755,
+  };
+  const yes = {
+    ...auxiliaryResolved.command.executable,
+    bytes: String(auxiliaryResolved.command.executable.bytes),
+  };
+  const manifest = buildControlledLoadSessionManifest(measuredResolved, auxiliaryResolved, {
+    generation: "34".repeat(16),
+    attemptsPerLeg: REFERENCE_CONFIRMATION_PROFILE.attemptsPerLeg,
+    targetCpu,
+    workerCpus: [loadCpu],
+    tasksetPath: "/usr/bin/taskset",
+    warmupMs: REFERENCE_CONFIRMATION_PROFILE.loadWarmupMs,
+    recoveryMs: REFERENCE_CONFIRMATION_PROFILE.recoveryMs,
+  });
+  const discoveryPlan = {
+    interpretationVersion: 1,
+    identity: {
+      kitRoot,
+      releaseFile: { path: sourceReleasePath,
+        sha256: createHash("sha256").update(sourceReleaseBytes).digest("hex"),
+        bytes: String(sourceReleaseBytes.length), mode: 0o644 },
+      appTreeSha256: release.components.appTreeSha256,
+      pgliteTreeSha256: release.components.pgliteTreeSha256,
+      controllerRuntime,
+      targetRuntime,
+      measuredWorkloadDigest: measuredResolved.digest,
+      conditionWorkloadDigest: auxiliaryResolved.digest,
+      taskset,
+      yes,
+    },
+    storage: { collectionDir: path.join(root, "reference-discovery-source") },
+    selection: { loadCpus: [loadCpu] },
+    schedule: { sessions: [{ targetCpu, controllerCpu }] },
+  };
+  const discoveryReport = {
+    complete: true,
+    selectionEligible: true,
+    highestObservedFaultRateCandidate: targetCpu,
+  };
+  const source = {
+    version: 1,
+    protocol: "reference-discovery-confirmation-source-v1",
+    sha256: "9".repeat(64),
+    targetCpu,
+    loadCpus: [loadCpu],
+  };
+  const plan = {
+    formatVersion: 2,
+    profile: { ...REFERENCE_CONFIRMATION_PROFILE },
+    selection: { controllerCpu, targetCpu, loadCpus: [loadCpu],
+      attemptsPerLeg: REFERENCE_CONFIRMATION_PROFILE.attemptsPerLeg },
+    identity: {
+      release,
+      executables: {
+        controller: { ...controllerRuntime, bytes: Number(controllerRuntime.bytes) },
+        target: { ...targetRuntime, bytes: Number(targetRuntime.bytes) },
+        taskset: { ...taskset, bytes: Number(taskset.bytes), version: "taskset fixture" },
+        yes: { ...yes, bytes: Number(yes.bytes), version: "yes fixture" },
+      },
+      child: { path: child, sha256: measuredResolved.provenance.files[0].sha256 },
+      pglite: { sha256: release.components.pgliteTreeSha256 },
+      app: { sha256: release.components.appTreeSha256 },
+    },
+    confirmation: {
+      version: 1,
+      protocol: "reference-discovery-confirmation-v1",
+      collectionDir: discoveryPlan.storage.collectionDir,
+      source,
+      discoveryPlan,
+      discoveryReport,
+      resources: { meetsMinimum: true },
+    },
+  };
+  const event = (type, value = {}) => ({
+    formatVersion: 2,
+    type,
+    unixMs: 1_789_041_600_000,
+    monotonicNs: "1000000",
+    ...value,
+  });
+  const status = "operational-incomplete";
+  const session = {
+    committed: false,
+    reason: "runner-error",
+    stage: "a1",
+    errorCode: "FIXTURE_STOP",
+    envelope: null,
+    attempts: { a1: [], b: [], a2: [] },
+  };
+  const records = [
+    event("reference-start", { plan }),
+    event("reference-session", { status, session }),
+    event("reference-end", { status }),
+  ];
+  const { digest: _measuredDigest, ...measuredDescriptor } = measuredResolved;
+  const { digest: _auxiliaryDigest, ...auxiliaryDescriptor } = auxiliaryResolved;
+  const progress = [
+    { formatVersion: 2, type: "progress-start", profileId: REFERENCE_CONFIRMATION_PROFILE.id,
+      profileVersion: 1, attemptsPerLeg: REFERENCE_CONFIRMATION_PROFILE.attemptsPerLeg,
+      plannedAttempts: REFERENCE_CONFIRMATION_PROFILE.attemptsPerLeg * 3,
+      plan, planBinding: fixtureBinding(plan) },
+    { formatVersion: 2, type: "session-manifest", manifest,
+      manifestBinding: fixtureBinding(manifest), workloads: {
+        measured: { contractVersion: 1, id: measuredResolved.id,
+          digest: measuredResolved.digest,
+          descriptor: JSON.parse(canonicalProtocolJson(measuredDescriptor)) },
+        auxiliary: { contractVersion: 1, id: auxiliaryResolved.id,
+          digest: auxiliaryResolved.digest,
+          descriptor: JSON.parse(canonicalProtocolJson(auxiliaryDescriptor)) },
+      } },
+    { formatVersion: 2, type: "progress-end", status, completedAttempts: 0 },
+  ];
+  writeFileSync(path.join(bundle, "reference.jsonl"),
+    `${records.map(JSON.stringify).join("\n")}\n`, { mode: 0o600 });
+  writeFileSync(path.join(bundle, "progress.jsonl"),
+    `${progress.map(JSON.stringify).join("\n")}\n`, { mode: 0o600 });
+  writeFileSync(path.join(bundle, "release.json"), `${JSON.stringify(release)}\n`, { mode: 0o600 });
+  writeFileSync(path.join(bundle, "result-state.json"),
+    `${JSON.stringify({ formatVersion: 2, status })}\n`, { mode: 0o600 });
+  writeFileSync(path.join(bundle, "summary.md"), "# fixture confirmation\n", { mode: 0o600 });
+  return { bundle, discoveryPlan, discoveryReport, source };
+}
+
 test("result preparation is version-bound, exact-allowlist, non-mutating, and checksummed", async () => {
   const root = directory("reference-results-root-");
   const destination = directory("reference-results-destination-");
@@ -640,6 +1112,131 @@ test("result preparation accepts a structurally consistent operational-incomplet
     archive: async (_source, output) => writeFileSync(output, "partial fixture", { flag: "wx" }),
   });
   assert.equal(result.status, "operational-incomplete");
+});
+
+test("result preparation binds adaptive confirmation to its authoritative discovery source", async () => {
+  const root = directory("reference-confirmation-export-");
+  const destination = directory("reference-confirmation-export-destination-");
+  const fixture = confirmationResultBundle(root);
+  const dependencies = {
+    now: () => new Date("2026-09-13T20:30:00Z"),
+    archive: async (_source, output) => writeFileSync(output, "confirmation fixture", {
+      flag: "wx",
+    }),
+    withReferenceDiscoveryReportSnapshot: async (collectionDir, operation) => {
+      assert.equal(collectionDir, fixture.discoveryPlan.storage.collectionDir);
+      return operation({
+        collectionDir,
+        plan: fixture.discoveryPlan,
+        report: fixture.discoveryReport,
+      }, { assertHeld: () => true });
+    },
+    referenceDiscoveryConfirmationSourceBinding: () => fixture.source,
+  };
+  const result = await prepareResults({
+    resultsRoot: root,
+    bundle: fixture.bundle,
+    destination,
+  }, dependencies);
+  assert.equal(result.status, "operational-incomplete");
+  assert.match(path.basename(result.archive),
+    /^fault-affinity-confirmation-operational-incomplete-/);
+
+  const eventFile = path.join(fixture.bundle, "reference.jsonl");
+  const records = readFileSync(eventFile, "utf8").trim().split("\n").map(JSON.parse);
+  records[0].plan.confirmation.source.sha256 = "8".repeat(64);
+  writeFileSync(eventFile, `${records.map(JSON.stringify).join("\n")}\n`);
+  const progressFile = path.join(fixture.bundle, "progress.jsonl");
+  const progress = readFileSync(progressFile, "utf8").trim().split("\n").map(JSON.parse);
+  progress[0].plan = records[0].plan;
+  progress[0].planBinding = fixtureBinding(records[0].plan);
+  writeFileSync(progressFile, `${progress.map(JSON.stringify).join("\n")}\n`);
+  await assert.rejects(prepareResults({
+    resultsRoot: root,
+    bundle: fixture.bundle,
+    destination,
+  }, { ...dependencies, now: () => new Date("2026-09-13T20:30:01Z") }),
+  /binding does not match/);
+});
+
+test("confirmation export rejects self-consistent runtime and launch tampering", async () => {
+  const mutations = [
+    {
+      name: "release metadata",
+      apply({ records, release }) {
+        records[0].plan.identity.release.release.version = "9.9.9";
+        records[0].plan.identity.release.release.tag = "v9.9.9";
+        records[0].plan.identity.release.release.sourceCommit = "5".repeat(40);
+        release.release.version = "9.9.9";
+        release.release.tag = "v9.9.9";
+        release.release.sourceCommit = "5".repeat(40);
+      },
+    },
+    {
+      name: "controller runtime",
+      apply({ records, release }) {
+        const sha256 = "6".repeat(64);
+        records[0].plan.identity.executables.controller.sha256 = sha256;
+        records[0].plan.identity.release.runtimes.controller.sha256 = sha256;
+        release.runtimes.controller.sha256 = sha256;
+      },
+    },
+    {
+      name: "controller CPU",
+      apply({ records }) {
+        records[0].plan.selection.controllerCpu = records[0].plan.selection.loadCpus[0];
+      },
+    },
+    {
+      name: "taskset path",
+      apply({ records, progress }) {
+        records[0].plan.identity.executables.taskset.path = "/usr/bin/false";
+        progress[1].manifest.execution.tasksetPath = "/usr/bin/false";
+        progress[1].manifestBinding = fixtureBinding(progress[1].manifest);
+      },
+    },
+    {
+      name: "measured cwd",
+      apply({ records, progress }) {
+        const descriptor = progress[1].workloads.measured.descriptor;
+        descriptor.command.cwd = records[0].plan.confirmation.discoveryPlan.identity.kitRoot;
+        const digest = createHash("sha256")
+          .update(canonicalProtocolJson(descriptor)).digest("hex");
+        progress[1].workloads.measured.digest = digest;
+        progress[1].manifest.measuredWorkload.digest = digest;
+        progress[1].manifestBinding = fixtureBinding(progress[1].manifest);
+      },
+    },
+  ];
+  for (const mutation of mutations) {
+    const root = directory(`reference-confirmation-${mutation.name.replaceAll(" ", "-")}-`);
+    const destination = directory("reference-confirmation-tamper-destination-");
+    const fixture = confirmationResultBundle(root);
+    const eventFile = path.join(fixture.bundle, "reference.jsonl");
+    const progressFile = path.join(fixture.bundle, "progress.jsonl");
+    const releaseFile = path.join(fixture.bundle, "release.json");
+    const records = readFileSync(eventFile, "utf8").trim().split("\n").map(JSON.parse);
+    const progress = readFileSync(progressFile, "utf8").trim().split("\n").map(JSON.parse);
+    const release = JSON.parse(readFileSync(releaseFile, "utf8"));
+    mutation.apply({ records, progress, release });
+    progress[0].plan = records[0].plan;
+    progress[0].planBinding = fixtureBinding(records[0].plan);
+    writeFileSync(eventFile, `${records.map(JSON.stringify).join("\n")}\n`);
+    writeFileSync(progressFile, `${progress.map(JSON.stringify).join("\n")}\n`);
+    writeFileSync(releaseFile, `${JSON.stringify(release)}\n`);
+    await assert.rejects(prepareResults({
+      resultsRoot: root,
+      bundle: fixture.bundle,
+      destination,
+    }, {
+      withReferenceDiscoveryReportSnapshot: async (collectionDir, operation) => operation({
+        collectionDir,
+        plan: fixture.discoveryPlan,
+        report: fixture.discoveryReport,
+      }, { assertHeld: () => true }),
+      referenceDiscoveryConfirmationSourceBinding: () => fixture.source,
+    }), /does not match its discovery source/, mutation.name);
+  }
 });
 
 test("result preparation rejects journal bindings and committed attempt-count tampering", async () => {
@@ -769,6 +1366,21 @@ test("result preparation maps a held execution lease to a clear busy error", asy
       (error) => error instanceof PrepareResultsError && error.code === "RESULT_BUNDLE_BUSY" &&
         /bundle is busy/.test(error.message));
   });
+});
+
+test("discovery result preparation maps coordinator contention before archiving", async () => {
+  const root = directory("reference-discovery-prepare-busy-");
+  const bundle = path.join(root, "reference-discovery-20260913T190000Z-test");
+  const destination = path.join(root, "destination");
+  mkdirSync(bundle, { mode: 0o700 });
+  mkdirSync(destination, { mode: 0o700 });
+  writeFileSync(path.join(bundle, "reference-discovery-plan.json"), "{}\n", { mode: 0o600 });
+  await assert.rejects(prepareResults({ resultsRoot: root, bundle, destination }, {
+    withReferenceDiscoveryPreservationSnapshot: async () => {
+      throw Object.assign(new Error("busy"), { code: "BUNDLE_EXECUTION_LEASE_BUSY" });
+    },
+  }), (error) => error instanceof PrepareResultsError && error.code === "RESULT_BUNDLE_BUSY");
+  assert.deepEqual(readdirSync(destination), []);
 });
 
 test("archive collisions fail before work and checksum races clean only invocation-owned output", async () => {

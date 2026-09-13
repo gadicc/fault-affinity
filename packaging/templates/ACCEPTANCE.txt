@@ -19,15 +19,15 @@ it stops at the first failed verification step.
     python3 safe-extract.py \
       fault-affinity-live-linux-x64.tar.gz \
       "$kit_dir"
-    "$kit_dir/fault-affinity/bin/run-reference" --help
-    "$kit_dir/fault-affinity/bin/run-reference" --results-root "$HOME"
+    "$kit_dir/fault-affinity/bin/discover-reference" --help
+    "$kit_dir/fault-affinity/bin/confirm-reference" --help
+    "$kit_dir/fault-affinity/bin/discover-reference" \
+      --results-root "$HOME" --target-cpus 3 --load-cpus 0-1
   )
 
-The final command is a dry run. It validates the release and prints a plan; it
-does not create a result bundle or start the workload. CPU 19 and load CPUs
-0-7 are preserved case-study defaults, not automatic fault localization. If
-they do not fit the machine, stop and use a reviewed override or the separate
-discovery flow.
+The final command is a dry run. It validates the release and prints the guided
+screen plan; it does not create a result bundle or start the workload. The
+explicit four-CPU layout is only an acceptance fixture, not a recommendation.
 
 For a confirmed run, persistent results, preparation, privacy review, and
 upload guidance, read README.txt inside the extracted kit and the public guide:

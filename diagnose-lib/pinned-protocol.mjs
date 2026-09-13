@@ -90,6 +90,16 @@ const LOADED_DISCOVERY_STATE_FILE_MAX_BYTES = Object.freeze({
   "loaded-discovery-report.json": 16 * 1024 * 1024,
   "loaded-discovery-report.md": 16 * 1024 * 1024,
 });
+const REFERENCE_DISCOVERY_STATE_FILE_MAX_BYTES = Object.freeze({
+  "reference-discovery-plan.json": 1024 * 1024,
+  "reference-discovery-coordination.json": 16 * 1024,
+  "reference-discovery-report.json": 16 * 1024 * 1024,
+  "reference-discovery-report.md": 1024 * 1024,
+  "reference-discovery-report.complete": 4 * 1024,
+});
+const REFERENCE_DISCOVERY_HISTORY_STATE_FILE_RE =
+  /^reference-discovery-history-[0-9]{5}-(?:start|terminal)\.json$/;
+const REFERENCE_DISCOVERY_HISTORY_STATE_FILE_MAX_BYTES = 16 * 1024;
 const PROTOCOL_MARKER = Symbol("pinnedProtocolPlan");
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -527,7 +537,7 @@ function fsyncDirectory(directory) {
 // The exact-CPU store reuses this proven no-clobber adapter in its own private
 // directory; legacy protocol readers still select only their own final names.
 const STATE_COMMIT_TEMP_RE =
-  /^\.(isolated-[0-9]{9}\.json|concurrent-[0-9]{9}-[a-z][a-z0-9_-]{0,63}\.json|exact-cpu-phase\.json|exact-cpu-attempt-[0-9]{9}\.json|baseline-phase\.json|baseline-wave-[0-9]{9}\.json|group-phase\.json|group-wave-[0-9]{9}\.json|pinned-concurrent-phase\.json|pinned-concurrent-wave-[0-9]{9}\.json|controlled-load-phase\.json|controlled-load-session\.json|debugger-phase\.json|debugger-attempt-[0-9]{9}-(?:envelope\.json|transcript|control)|fault-affinity-bundle\.json|loaded-discovery\.json|loaded-discovery-report\.(?:json|md))\.([1-9][0-9]*)\.([a-f0-9]{16})\.(writing|ready)\.tmp$/;
+  /^\.(isolated-[0-9]{9}\.json|concurrent-[0-9]{9}-[a-z][a-z0-9_-]{0,63}\.json|exact-cpu-phase\.json|exact-cpu-attempt-[0-9]{9}\.json|baseline-phase\.json|baseline-wave-[0-9]{9}\.json|group-phase\.json|group-wave-[0-9]{9}\.json|pinned-concurrent-phase\.json|pinned-concurrent-wave-[0-9]{9}\.json|controlled-load-phase\.json|controlled-load-session\.json|debugger-phase\.json|debugger-attempt-[0-9]{9}-(?:envelope\.json|transcript|control)|fault-affinity-bundle\.json|loaded-discovery\.json|loaded-discovery-report\.(?:json|md)|reference-discovery-(?:plan|coordination)\.json|reference-discovery-report\.(?:json|md|complete)|reference-discovery-history-[0-9]{5}-(?:start|terminal)\.json)\.([1-9][0-9]*)\.([a-f0-9]{16})\.(writing|ready)\.tmp$/;
 
 function processIsLive(pidText) {
   const pid = Number(pidText);
@@ -559,6 +569,10 @@ function recoverInterruptedStateCommits(directory) {
         !name.startsWith(".controlled-load-") &&
         !name.startsWith(".debugger-") &&
         !name.startsWith(".loaded-discovery") &&
+        !name.startsWith(".reference-discovery-plan.json.") &&
+        !name.startsWith(".reference-discovery-coordination.json.") &&
+        !name.startsWith(".reference-discovery-report.") &&
+        !name.startsWith(".reference-discovery-history-") &&
         !name.startsWith(".fault-affinity-bundle.json.")) continue;
     const match = name.match(STATE_COMMIT_TEMP_RE);
     if (match === null) continue;
@@ -574,7 +588,11 @@ function recoverInterruptedStateCommits(directory) {
     const temporaryPath = path.join(directory, name);
     const finalPath = path.join(directory, finalName);
     const collectionMaximum = LOADED_DISCOVERY_STATE_FILE_MAX_BYTES[finalName];
-    const maximumBytes = collectionMaximum ?? (finalName.startsWith("concurrent-")
+    const referenceCollectionMaximum = REFERENCE_DISCOVERY_STATE_FILE_MAX_BYTES[finalName];
+    const historyMaximum = REFERENCE_DISCOVERY_HISTORY_STATE_FILE_RE.test(finalName)
+      ? REFERENCE_DISCOVERY_HISTORY_STATE_FILE_MAX_BYTES : undefined;
+    const recoverableMaximum = collectionMaximum ?? referenceCollectionMaximum ?? historyMaximum;
+    const maximumBytes = recoverableMaximum ?? (finalName.startsWith("concurrent-")
       ? MAX_WAVE_STATE_FILE_BYTES
       : finalName.startsWith("exact-cpu-")
         ? EXACT_CPU_STATE_FILE_MAX_BYTES
@@ -643,7 +661,7 @@ function recoverInterruptedStateCommits(directory) {
       // A discovery resume has no command-line replacement for its plan.
       // Retain fully written, fsynced collection artifacts even if the writer
       // died before the no-clobber link. Existing protocol recovery is unchanged.
-      publishPath: collectionMaximum !== undefined && stage === "ready" && finalStat === null
+      publishPath: recoverableMaximum !== undefined && stage === "ready" && finalStat === null
         ? finalPath : null,
     });
   }
@@ -733,18 +751,33 @@ function removeStateFile(directory, name) {
   return true;
 }
 
-export function createFileStateAdapter(stateDirectory) {
+function fileStateAdapter(stateDirectory, { recover }) {
   const directory = validateAbsolutePath(stateDirectory, "state directory");
   validateStateDirectory(directory);
   return Object.freeze({
     list: () => {
-      recoverInterruptedStateCommits(directory);
+      if (recover) recoverInterruptedStateCommits(directory);
       return listStableDirectory(directory);
     },
     read: (name, maxBytes) => readStableStateFile(directory, name, maxBytes),
-    commit: (name, bytes) => commitStateFile(directory, name, bytes),
-    remove: (name) => removeStateFile(directory, name),
+    commit: recover
+      ? (name, bytes) => commitStateFile(directory, name, bytes)
+      : () => { throw new PinnedProtocolStateError("read-only state adapter cannot commit"); },
+    remove: recover
+      ? (name) => removeStateFile(directory, name)
+      : () => { throw new PinnedProtocolStateError("read-only state adapter cannot remove"); },
   });
+}
+
+export function createFileStateAdapter(stateDirectory) {
+  return fileStateAdapter(stateDirectory, { recover: true });
+}
+
+// Inspection commands must not silently publish or remove a stranded commit.
+// Temporary entries remain visible to the format-specific reader, which then
+// fails closed because they are outside its accepted final-file inventory.
+export function createReadOnlyFileStateAdapter(stateDirectory) {
+  return fileStateAdapter(stateDirectory, { recover: false });
 }
 
 function resolveStateAdapter(options) {

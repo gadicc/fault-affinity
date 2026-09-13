@@ -24,6 +24,7 @@ import {
   buildPinnedConcurrentPlan,
   canonicalProtocolJsonLine,
   createFileStateAdapter,
+  createReadOnlyFileStateAdapter,
   finalizeConcurrentProtocol,
   finalizeIsolatedProtocol,
   protocolFileBinding,
@@ -861,6 +862,20 @@ test("filesystem state adapter publishes private single-link files and never clo
     /safe bounded private state file/,
   );
   assert.equal(readFileSync(file, "utf8"), original);
+});
+
+test("read-only filesystem adapter leaves interrupted commit files untouched", async () => {
+  const stateDir = path.join(temporaryDirectory(), "state");
+  mkdirSync(stateDir, { mode: 0o700 });
+  const temporaryName = ".isolated-000000001.json.99999999.0123456789abcdef.ready.tmp";
+  const temporary = path.join(stateDir, temporaryName);
+  writeFileSync(temporary, "fixture\n", { mode: 0o600 });
+  const adapter = createReadOnlyFileStateAdapter(stateDir);
+  assert.deepEqual(await adapter.list(), [temporaryName]);
+  assert.equal(existsSync(temporary), true);
+  assert.equal(existsSync(path.join(stateDir, "isolated-000000001.json")), false);
+  await assert.rejects(Promise.resolve().then(() => adapter.commit("other", Buffer.from("x"))),
+    /read-only state adapter cannot commit/);
 });
 
 test("filesystem state adapter reconciles interrupted private commit publications", async () => {

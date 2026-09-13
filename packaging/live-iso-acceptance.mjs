@@ -222,6 +222,22 @@ export function buildQemuArguments({
   ]);
 }
 
+export function buildQemuLaunch(qemuArguments) {
+  if (!Array.isArray(qemuArguments) ||
+    qemuArguments.some((argument) => typeof argument !== "string")) {
+    fail("QEMU arguments must be an array of strings");
+  }
+  return Object.freeze({
+    program: "prlimit",
+    arguments: Object.freeze([
+      "--memlock=0:0",
+      "--",
+      "qemu-system-x86_64",
+      ...qemuArguments,
+    ]),
+  });
+}
+
 export function buildGuestStartCommand() {
   return "set -e; " +
     "trap 's=$?; echo FAULT_AFFINITY_VM_STATUS=$s; sudo /usr/sbin/poweroff' EXIT; " +
@@ -372,7 +388,12 @@ async function main() {
   try {
     const qemuVersion = runChecked("qemu-system-x86_64", ["--version"], { capture: true })
       .split("\n")[0];
+    const prlimitVersion = runChecked("prlimit", ["--version"], { capture: true })
+      .split("\n")[0];
     record.vm.qemuVersion = qemuVersion;
+    record.vm.launcher = "prlimit";
+    record.vm.qemuProcessMemlockBytes = 0;
+    record.vm.prlimitVersion = prlimitVersion;
     const kernel = path.join(scratch, "vmlinuz");
     const initrd = path.join(scratch, "initrd");
     const candidateIso = path.join(scratch, "candidate.iso");
@@ -403,8 +424,9 @@ async function main() {
       memoryMiB: options.memoryMiB,
       acceleration: record.vm.acceleration,
     });
+    const qemuLaunch = buildQemuLaunch(qemuArguments);
     process.stdout.write(`Booting the unmodified live filesystem with ${record.vm.acceleration}.\n`);
-    const guest = await runVirtualMachine("qemu-system-x86_64", qemuArguments,
+    const guest = await runVirtualMachine(qemuLaunch.program, qemuLaunch.arguments,
       path.join(options.outputDirectory, "serial.log"), options.timeoutSeconds);
     record.status = "passed";
     record.completedAt = new Date().toISOString();
