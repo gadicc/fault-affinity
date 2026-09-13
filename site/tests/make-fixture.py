@@ -46,7 +46,7 @@ if variant != "legacy-valid":
             "pgliteVersion": "0.5.4",
         },
     }
-    release["capabilities"] = {"referenceDiscovery": 1}
+    release["capabilities"] = {"referenceDiscovery": 1, "referenceConfirmation": 1}
 if variant == "bad-release":
     release["release"]["tag"] = "v9.9.9"
 elif variant == "runtime-mismatch":

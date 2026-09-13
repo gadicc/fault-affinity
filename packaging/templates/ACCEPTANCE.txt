@@ -20,6 +20,7 @@ it stops at the first failed verification step.
       fault-affinity-live-linux-x64.tar.gz \
       "$kit_dir"
     "$kit_dir/fault-affinity/bin/discover-reference" --help
+    "$kit_dir/fault-affinity/bin/confirm-reference" --help
     "$kit_dir/fault-affinity/bin/discover-reference" \
       --results-root "$HOME" --target-cpus 3 --load-cpus 0-1
   )

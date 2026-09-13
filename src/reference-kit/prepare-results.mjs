@@ -37,7 +37,12 @@ import {
   BundleExecutionLeaseError,
   withBundleExecutionLease,
 } from "../../diagnose-lib/bundle-execution-lease.mjs";
-import { withReferenceDiscoveryPreservationSnapshot } from "./discovery-campaign.mjs";
+import {
+  withReferenceDiscoveryPreservationSnapshot,
+  withReferenceDiscoveryReportSnapshot,
+} from "./discovery-campaign.mjs";
+import { REFERENCE_CONFIRMATION_PROFILE } from "./discovery-controller.mjs";
+import { referenceDiscoveryConfirmationSourceBinding } from "./discovery-protocol.mjs";
 import {
   REFERENCE_DISCOVERY_COORDINATION_DIRECTORY,
   REFERENCE_DISCOVERY_COORDINATION_FILE,
@@ -120,9 +125,9 @@ function parseRelease(source) {
   return value;
 }
 
-function validateEventBase(value, index) {
+function validateEventBase(value, index, formatVersion = REFERENCE_FORMAT_VERSION) {
   if (value === null || typeof value !== "object" || Array.isArray(value) ||
-      value.formatVersion !== REFERENCE_FORMAT_VERSION ||
+      value.formatVersion !== formatVersion ||
       !Number.isSafeInteger(value.unixMs) || value.unixMs < 0 ||
       typeof value.monotonicNs !== "string" || !/^(0|[1-9][0-9]{0,31})$/.test(value.monotonicNs)) {
     fail(`reference.jsonl line ${index + 1} has an unsupported event envelope`);
@@ -150,7 +155,53 @@ function validateAttemptEvidence(evidence, resolved, label) {
   catch (error) { fail(`${label} is invalid: ${error.message}`); }
 }
 
-function validateManifest(record, startPlan) {
+function sameExecutableIdentity(actual, expected, { version = false } = {}) {
+  return actual?.path === expected?.path && actual?.sha256 === expected?.sha256 &&
+    String(actual?.bytes) === String(expected?.bytes) &&
+    (!version || actual?.version === expected?.version);
+}
+
+function validateConfirmationLaunchBinding(startPlan, record, manifest) {
+  const sourcePlan = startPlan.confirmation?.discoveryPlan;
+  const sourceIdentity = sourcePlan?.identity;
+  const resultIdentity = startPlan.identity;
+  const release = resultIdentity?.release;
+  const measured = record.workloads?.measured;
+  const auxiliary = record.workloads?.auxiliary;
+  const selectedSession = sourcePlan?.schedule?.sessions?.find((session) =>
+    session.targetCpu === startPlan.selection?.targetCpu);
+  const expectedChild = path.join(sourceIdentity?.kitRoot ?? "", "app/child.mjs");
+  const expectedApp = path.join(sourceIdentity?.kitRoot ?? "", "app");
+  if (selectedSession?.controllerCpu !== startPlan.selection?.controllerCpu ||
+      !sameExecutableIdentity(resultIdentity?.executables?.controller,
+        sourceIdentity?.controllerRuntime, { version: true }) ||
+      !sameExecutableIdentity(resultIdentity?.executables?.target,
+        sourceIdentity?.targetRuntime, { version: true }) ||
+      !sameExecutableIdentity(resultIdentity?.executables?.taskset, sourceIdentity?.taskset) ||
+      !sameExecutableIdentity(resultIdentity?.executables?.yes, sourceIdentity?.yes) ||
+      release?.runtimes?.controller?.version !== sourceIdentity?.controllerRuntime?.version ||
+      release?.runtimes?.controller?.sha256 !== sourceIdentity?.controllerRuntime?.sha256 ||
+      release?.runtimes?.reference?.version !== sourceIdentity?.targetRuntime?.version ||
+      release?.runtimes?.reference?.sha256 !== sourceIdentity?.targetRuntime?.sha256 ||
+      release?.components?.appTreeSha256 !== sourceIdentity?.appTreeSha256 ||
+      release?.components?.pgliteTreeSha256 !== sourceIdentity?.pgliteTreeSha256 ||
+      resultIdentity?.app?.sha256 !== sourceIdentity?.appTreeSha256 ||
+      resultIdentity?.pglite?.sha256 !== sourceIdentity?.pgliteTreeSha256 ||
+      measured?.digest !== sourceIdentity?.measuredWorkloadDigest ||
+      auxiliary?.digest !== sourceIdentity?.conditionWorkloadDigest ||
+      manifest?.execution?.tasksetPath !== sourceIdentity?.taskset?.path ||
+      resultIdentity?.child?.path !== expectedChild ||
+      measured?.descriptor?.command?.cwd !== expectedApp ||
+      !same(measured?.descriptor?.command?.args, [expectedChild]) ||
+      measured?.descriptor?.provenance?.files?.[0]?.path !== expectedChild ||
+      auxiliary?.descriptor?.command?.cwd !== sourceIdentity?.kitRoot ||
+      !same(auxiliary?.descriptor?.command?.args, [])) {
+    fail("confirmation runtime or launch recipe does not match its discovery source",
+      "RESULT_CONFIRMATION_SOURCE_MISMATCH");
+  }
+}
+
+function validateManifest(record, startPlan, profile = REFERENCE_PROFILE) {
   requireBinding(record.manifestBinding, record.manifest, "session manifest");
   const manifest = record.manifest;
   const schedule = manifest?.schedule;
@@ -170,10 +221,11 @@ function validateManifest(record, startPlan) {
     }
     return resolved;
   };
+  const confirmation = profile.id === REFERENCE_CONFIRMATION_PROFILE.id;
   const measuredResolved = validateWorkload(record.workloads?.measured,
-    "reference-pglite-target", "measured");
+    confirmation ? "reference-pglite-target-discovery" : "reference-pglite-target", "measured");
   const auxiliaryResolved = validateWorkload(record.workloads?.auxiliary,
-    "reference-load-worker", "auxiliary");
+    confirmation ? "reference-guided-yes-load" : "reference-load-worker", "auxiliary");
   if (manifest?.version !== 1 || manifest.phase !== "controlled-load-aba" ||
       !/^[a-f0-9]{32}$/.test(manifest.generation ?? "") ||
       !same(manifest.measuredWorkload, binding(record.workloads?.measured)) ||
@@ -181,8 +233,8 @@ function validateManifest(record, startPlan) {
       schedule?.version !== 1 || schedule.algorithm !== "fixed-single-workload-aba-v1" ||
       schedule.attemptsPerLeg !== startPlan.selection.attemptsPerLeg ||
       schedule.attemptCount !== schedule.attemptsPerLeg * 3 ||
-      schedule.warmupMs !== REFERENCE_PROFILE.loadWarmupMs ||
-      schedule.recoveryMs !== REFERENCE_PROFILE.recoveryMs ||
+      schedule.warmupMs !== profile.loadWarmupMs ||
+      schedule.recoveryMs !== profile.recoveryMs ||
       !same(schedule.legs, [{ leg: "a1", condition: "without-load" },
         { leg: "b", condition: "with-load" }, { leg: "a2", condition: "after-recovery" }]) ||
       execution?.targetCpu !== startPlan.selection.targetCpu ||
@@ -193,10 +245,17 @@ function validateManifest(record, startPlan) {
   }
   const measured = record.workloads.measured.descriptor;
   const auxiliary = record.workloads.auxiliary.descriptor;
+  if (confirmation) validateConfirmationLaunchBinding(startPlan, record, manifest);
   if (!same(measured.outcomes, { mappedExits: [], targetSignals: ["SIGSEGV"] }) ||
       measured.attempt?.mode !== "exit" ||
-      measured.attempt.timeoutMs !== REFERENCE_PROFILE.attemptTimeoutMs ||
+      measured.attempt.timeoutMs !== profile.attemptTimeoutMs ||
+      measured.attempt.termGraceMs !== profile.termGraceMs ||
+      measured.attempt.killGraceMs !== profile.killGraceMs ||
       auxiliary.attempt?.mode !== "survive-window" ||
+      auxiliary.attempt.termGraceMs !== profile.termGraceMs ||
+      auxiliary.attempt.killGraceMs !== profile.killGraceMs ||
+      auxiliary.attempt.timeoutMs !== (confirmation ? 60 * 60 * 1_000 :
+        7 * 24 * 60 * 60 * 1_000) ||
       startPlan.identity?.release?.runtimes?.reference?.sha256 !== measured.command?.executable?.sha256 ||
       startPlan.identity?.executables?.yes?.sha256 !== auxiliary.command?.executable?.sha256 ||
       startPlan.identity?.child?.sha256 !== measured.provenance?.files?.[0]?.sha256) {
@@ -272,13 +331,13 @@ function validateSessionEvidence(session, manifest, measuredResolved, auxiliaryR
   }
 }
 
-function validateProgressJournal(source, state, referenceRecords) {
+function validateProgressJournal(source, state, referenceRecords, profile = REFERENCE_PROFILE) {
   const lines = readFileSync(path.join(source, "progress.jsonl"), "utf8").split("\n");
   if (lines.at(-1) !== "") fail("progress.jsonl ends with an incomplete line");
   const records = lines.slice(0, -1).map((line, index) => {
     let value;
     try { value = JSON.parse(line); } catch { fail(`progress.jsonl line ${index + 1} is invalid JSON`); }
-    if (value?.formatVersion !== REFERENCE_FORMAT_VERSION ||
+    if (value?.formatVersion !== state.formatVersion ||
         !["progress-start", "session-manifest", "attempt-complete", "attempt-error", "progress-end"].includes(value.type)) {
       fail(`progress.jsonl line ${index + 1} has an unsupported record`);
     }
@@ -287,7 +346,7 @@ function validateProgressJournal(source, state, referenceRecords) {
   const start = records[0];
   const end = records.at(-1);
   if (records.length < 2 || start.type !== "progress-start" || end.type !== "progress-end" ||
-      start.profileId !== "load-aba-reference" || start.profileVersion !== 1 ||
+      start.profileId !== profile.id || start.profileVersion !== profile.version ||
       !Number.isSafeInteger(start.attemptsPerLeg) ||
       start.attemptsPerLeg < 1 || start.plannedAttempts !== start.attemptsPerLeg * 3 ||
       end.status !== state.status) {
@@ -302,7 +361,7 @@ function validateProgressJournal(source, state, referenceRecords) {
     fail("progress.jsonl must bind exactly one session manifest before attempts");
   }
   const { manifest, measuredResolved, auxiliaryResolved } =
-    validateManifest(manifestRecords[0], referenceRecords[0].plan);
+    validateManifest(manifestRecords[0], referenceRecords[0].plan, profile);
   if (start.attemptsPerLeg !== referenceRecords[0].plan.selection.attemptsPerLeg ||
       start.attemptsPerLeg !== manifest.schedule.attemptsPerLeg ||
       start.plannedAttempts !== manifest.schedule.attemptCount) {
@@ -362,19 +421,28 @@ function inspectBundle(resultsRoot, bundle) {
   });
 
   const state = JSON.parse(readFileSync(path.join(source, "result-state.json"), "utf8"));
-  if (state?.formatVersion !== REFERENCE_FORMAT_VERSION ||
+  const confirmation = state?.formatVersion === 2;
+  const profile = confirmation ? REFERENCE_CONFIRMATION_PROFILE : REFERENCE_PROFILE;
+  if (![REFERENCE_FORMAT_VERSION, 2].includes(state?.formatVersion) ||
       !["complete", "interrupted", "operational-incomplete"].includes(state.status) ||
       Object.keys(state).sort().join(",") !== "formatVersion,status") {
     fail("result-state.json is not an exact supported reference result state");
   }
   const release = parseRelease(source);
+  if (confirmation && (release.capabilities?.referenceConfirmation !== 1 ||
+      release.profiles?.referenceConfirmation?.id !== REFERENCE_CONFIRMATION_PROFILE.id ||
+      release.profiles?.referenceConfirmation?.version !== REFERENCE_CONFIRMATION_PROFILE.version ||
+      release.profiles?.referenceConfirmation?.pgliteVersion !==
+        REFERENCE_CONFIRMATION_PROFILE.pgliteVersion)) {
+    fail("release.json confirmation profile or capability is invalid");
+  }
   const lines = readFileSync(path.join(source, "reference.jsonl"), "utf8").split("\n");
   if (lines.at(-1) !== "") fail("reference.jsonl ends with an incomplete line");
   const records = lines.slice(0, -1).map((line, index) => {
     if (line.length === 0) fail(`reference.jsonl line ${index + 1} is empty`);
     let value;
     try { value = JSON.parse(line); } catch { fail(`reference.jsonl line ${index + 1} is invalid JSON`); }
-    validateEventBase(value, index);
+    validateEventBase(value, index, state.formatVersion);
     return value;
   });
   if (records.length !== 3 || records[0].type !== "reference-start" ||
@@ -387,14 +455,39 @@ function inspectBundle(resultsRoot, bundle) {
     fail("reference.jsonl event times are not monotonic");
   }
   const plannedRelease = records[0].plan?.identity?.release;
-  if (records[0].plan?.formatVersion !== REFERENCE_FORMAT_VERSION ||
+  if (records[0].plan?.formatVersion !== state.formatVersion ||
       JSON.stringify(plannedRelease) !== JSON.stringify(release)) {
     fail("reference.jsonl plan does not match release.json");
   }
-  if (records[0].plan?.profile?.id !== release.profile.id ||
-      records[0].plan?.profile?.version !== release.profile.version ||
-      !same(records[0].plan.profile, { ...REFERENCE_PROFILE, loadCpus: [...REFERENCE_PROFILE.loadCpus] })) {
+  const declaredProfile = confirmation ? release.profiles.referenceConfirmation : release.profile;
+  if (records[0].plan?.profile?.id !== declaredProfile.id ||
+      records[0].plan?.profile?.version !== declaredProfile.version ||
+      !same(records[0].plan.profile, profile === REFERENCE_PROFILE
+        ? { ...REFERENCE_PROFILE, loadCpus: [...REFERENCE_PROFILE.loadCpus] }
+        : REFERENCE_CONFIRMATION_PROFILE)) {
     fail("reference.jsonl plan does not match the release profile");
+  }
+  const confirmationContext = records[0].plan.confirmation;
+  if (confirmation && (confirmationContext === null ||
+      typeof confirmationContext !== "object" || Array.isArray(confirmationContext) ||
+      confirmationContext.version !== 1 ||
+      confirmationContext.protocol !== "reference-discovery-confirmation-v1" ||
+      typeof confirmationContext.collectionDir !== "string" ||
+      !path.isAbsolute(confirmationContext.collectionDir) ||
+      confirmationContext.discoveryPlan?.storage?.collectionDir !==
+        confirmationContext.collectionDir ||
+      confirmationContext.discoveryReport?.complete !== true ||
+      confirmationContext.discoveryReport?.selectionEligible !== true ||
+      confirmationContext.discoveryReport?.highestObservedFaultRateCandidate !==
+        records[0].plan.selection?.targetCpu ||
+      !same(confirmationContext.discoveryPlan?.selection?.loadCpus,
+        records[0].plan.selection?.loadCpus) ||
+      records[0].plan.selection?.attemptsPerLeg !==
+        REFERENCE_CONFIRMATION_PROFILE.attemptsPerLeg)) {
+    fail("confirmation result has an invalid discovery source context");
+  }
+  if (!confirmation && confirmationContext !== undefined) {
+    fail("fixed reference result cannot contain a confirmation source");
   }
   if (state.status === "complete") {
     if (records[1].type !== "reference-session" || records[1].status !== "complete" ||
@@ -409,8 +502,14 @@ function inspectBundle(resultsRoot, bundle) {
       (state.status === "interrupted" && records[1].code !== "REFERENCE_EXTERNAL_CANCEL")) {
     fail(`${state.status} result has an invalid operational record`);
   }
-  validateProgressJournal(source, state, records);
-  return Object.freeze({ source, status: state.status, inventory: Object.freeze(inventory) });
+  validateProgressJournal(source, state, records, profile);
+  return Object.freeze({
+    source,
+    status: state.status,
+    kind: confirmation ? "reference-confirmation-v1" : "reference-fixed-v1",
+    inventory: Object.freeze(inventory),
+    ...(confirmation ? { plan: records[0].plan } : {}),
+  });
 }
 
 function discoveryInventoryContract(plan, { preservation }) {
@@ -815,8 +914,93 @@ export async function prepareResults(rawOptions, dependencies = {}) {
 
 async function prepareResultsWithLease(rawOptions, dependencies) {
   const inspected = inspectBundle(rawOptions.resultsRoot, rawOptions.bundle);
+  if (inspected.kind === "reference-confirmation-v1") {
+    return prepareConfirmationResultsWithLease(inspected, rawOptions, dependencies);
+  }
   return publishPreparedResults(inspected, rawOptions, dependencies,
     () => inspectBundle(rawOptions.resultsRoot, rawOptions.bundle));
+}
+
+function validateConfirmationSource(inspected, snapshot, dependencies) {
+  const confirmation = inspected.plan.confirmation;
+  if (snapshot.collectionDir !== confirmation.collectionDir ||
+      !same(snapshot.plan, confirmation.discoveryPlan) ||
+      !same(snapshot.report, confirmation.discoveryReport)) {
+    fail("confirmation discovery source no longer matches its authoritative collection",
+      "RESULT_CONFIRMATION_SOURCE_MISMATCH");
+  }
+  const sourceRelease = snapshot.plan.identity.releaseFile;
+  let before;
+  try { before = lstatSync(sourceRelease.path, { bigint: true }); }
+  catch {
+    fail("confirmation source release declaration is unavailable",
+      "RESULT_CONFIRMATION_SOURCE_MISMATCH");
+  }
+  if (!before.isFile() || before.nlink !== 1n || before.size > 128n * 1024n ||
+      before.size.toString() !== sourceRelease.bytes ||
+      Number(before.mode & 0o777n) !== sourceRelease.mode) {
+    fail("confirmation source release declaration identity changed",
+      "RESULT_CONFIRMATION_SOURCE_MISMATCH");
+  }
+  const releaseBytes = readBoundedStableFile(sourceRelease.path, before, "source RELEASE.json");
+  if (createHash("sha256").update(releaseBytes).digest("hex") !== sourceRelease.sha256) {
+    fail("confirmation source release declaration digest changed",
+      "RESULT_CONFIRMATION_SOURCE_MISMATCH");
+  }
+  let releaseDeclaration;
+  try { releaseDeclaration = JSON.parse(releaseBytes.toString("utf8")); }
+  catch {
+    fail("confirmation source release declaration is invalid JSON",
+      "RESULT_CONFIRMATION_SOURCE_MISMATCH");
+  }
+  if (!same(releaseDeclaration, inspected.plan.identity.release)) {
+    fail("confirmation release declaration does not match its discovery source",
+      "RESULT_CONFIRMATION_SOURCE_MISMATCH");
+  }
+  let binding;
+  try {
+    binding = (dependencies.referenceDiscoveryConfirmationSourceBinding ??
+      referenceDiscoveryConfirmationSourceBinding)(snapshot.plan, snapshot.report);
+  } catch (error) {
+    fail(`confirmation discovery source is ineligible: ${error.message}`,
+      "RESULT_CONFIRMATION_SOURCE_MISMATCH");
+  }
+  if (!same(binding, confirmation.source) ||
+      binding.targetCpu !== inspected.plan.selection.targetCpu ||
+      !same(binding.loadCpus, inspected.plan.selection.loadCpus)) {
+    fail("confirmation result binding does not match its authoritative discovery source",
+      "RESULT_CONFIRMATION_SOURCE_MISMATCH");
+  }
+}
+
+async function prepareConfirmationResultsWithLease(inspected, rawOptions, dependencies) {
+  const withSnapshot = dependencies.withReferenceDiscoveryReportSnapshot ??
+    withReferenceDiscoveryReportSnapshot;
+  try {
+    return await withSnapshot(inspected.plan.confirmation.collectionDir,
+      async (snapshot, coordinator) => {
+        coordinator.assertHeld();
+        validateConfirmationSource(inspected, snapshot, dependencies);
+        coordinator.assertHeld();
+        return publishPreparedResults(
+          inspected,
+          rawOptions,
+          dependencies,
+          () => {
+            const after = inspectBundle(rawOptions.resultsRoot, rawOptions.bundle);
+            validateConfirmationSource(after, snapshot, dependencies);
+            return after;
+          },
+          () => coordinator.assertHeld(),
+        );
+      }, dependencies.discoveryDependencies ?? {});
+  } catch (error) {
+    if (error?.code === "BUNDLE_EXECUTION_LEASE_BUSY") {
+      fail("confirmation source is busy; wait for its controller or another preparer to finish",
+        "RESULT_BUNDLE_BUSY");
+    }
+    throw error;
+  }
 }
 
 async function prepareDiscoveryResults(rawOptions, source, dependencies) {
@@ -871,7 +1055,9 @@ async function publishPreparedResults(
   }
   const prefix = inspected.kind === "reference-discovery-v1"
     ? `fault-affinity-discovery-${inspected.status}`
-    : "fault-affinity-results";
+    : inspected.kind === "reference-confirmation-v1"
+      ? `fault-affinity-confirmation-${inspected.status}`
+      : "fault-affinity-results";
   const base = `${prefix}-${stamp((dependencies.now ?? (() => new Date()))())}.tar.gz`;
   const finalArchive = path.join(destination, base);
   const checksumFile = `${finalArchive}.sha256`;
@@ -936,7 +1122,7 @@ async function publishPreparedResults(
 
 export function prepareResultsUsage() {
   return "Usage: prepare-results --results-root ROOT --bundle ROOT/BUNDLE --destination DEST\n\n" +
-    "Accepts a fixed reference result or a stable guided-discovery collection.\n" +
+    "Accepts a fixed reference result, adaptive confirmation, or guided-discovery collection.\n" +
     "Incomplete discovery exports are labelled incomplete-non-selection-evidence.\n" +
     "The bundle must be below ROOT and DEST must be an existing directory outside it.\n" +
     "Creates a new tar.gz and adjacent .sha256 without modifying the source bundle; DEST may be FAT/exFAT.\n" +

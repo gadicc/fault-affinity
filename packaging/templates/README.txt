@@ -9,6 +9,13 @@ topology and proposes which CPUs to compare; it does not assume CPU 19:
 That command is a safe preview. Nothing live runs unless you later copy the
 exact command it prints with --yes.
 
+If a completed screen finds a candidate, it prints a separate command like:
+
+  ./bin/confirm-reference --from-discovery /absolute/path/to/screen
+
+That command is also a preview. Confirmation collects fresh A1/B/A2 samples;
+it never treats the shorter screen as confirmation evidence.
+
 It records bounded machine, BIOS, microcode, kernel, runtime, and CPU-topology
 identity without serial numbers. Continuous frequency and temperature
 telemetry are not included in this first, acceptance-gated kit.
@@ -36,8 +43,9 @@ After the run, create a privacy-reviewable archive with:
     --bundle /absolute/path/to/results-root/result-or-discovery-collection \
     --destination /absolute/path/to/persistent-destination
 
-The same command accepts complete or interrupted guided screens. Interrupted
-exports are labelled incomplete-non-selection-evidence and never gain a
-candidate from missing samples.
+The same command accepts fixed results, adaptive confirmations, and complete or
+interrupted guided screens. Interrupted discovery exports are labelled
+incomplete-non-selection-evidence and never gain a candidate from missing
+samples.
 
 Review share/UPLOAD-RESULTS.txt before moving or uploading evidence.

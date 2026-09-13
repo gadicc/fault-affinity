@@ -10,7 +10,7 @@
   },
   "scripts": {
     "test": "bash diagnose-lib/tests/run-tests.sh && npm run test:distribution",
-    "test:distribution": "node --test diagnose-lib/tests/reference-kit-tests.mjs packaging/tests/packaging.test.mjs && bash site/tests/run-tests.sh",
+    "test:distribution": "node --test diagnose-lib/tests/reference-kit-tests.mjs diagnose-lib/tests/reference-confirmation.test.mjs packaging/tests/packaging.test.mjs && bash site/tests/run-tests.sh",
     "acceptance:live-iso": "node packaging/live-iso-acceptance.mjs",
     "rehearsal:release-recovery": "node packaging/rehearse-release-recovery.mjs",
     "fault-affinity": "node fault-affinity.mjs",

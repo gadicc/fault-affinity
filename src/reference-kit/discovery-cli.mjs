@@ -156,13 +156,35 @@ function shellQuote(value) {
   return `'${value.replaceAll("'", `'\"'\"'`)}'`;
 }
 
+function confirmationPreviewCommand(plan, collectionDir) {
+  return `${shellQuote(path.join(plan.identity.kitRoot, "bin/confirm-reference"))} ` +
+    `'--from-discovery' ${shellQuote(collectionDir)} '--dry-run'`;
+}
+
+function printConfirmationGuidance(result, output) {
+  if (result.report?.complete !== true || result.report?.selectionEligible !== true ||
+      !Number.isSafeInteger(result.report?.highestObservedFaultRateCandidate)) return;
+  output("Fresh confirmation preview (the screen is selection only):\n\n" +
+    confirmationPreviewCommand(result.plan, result.collectionDir));
+}
+
 function renderResumePreview(result, collectionDir,
   renderReport = renderReferenceDiscoveryReportMarkdown, { resumable = true } = {}) {
   const report = result.report;
   const launcher = path.join(result.plan.identity.kitRoot, "bin/discover-reference");
-  const terminal = report.complete
-    ? "This screen is already complete; no resume work is required."
-    : resumable
+  const terminal = report.complete && resumable
+    ? Number.isSafeInteger(report.highestObservedFaultRateCandidate) &&
+        report.selectionEligible === true
+      ? "This screen is complete. Preview a fresh, separate confirmation:\n\n" +
+        confirmationPreviewCommand(result.plan, collectionDir)
+      : "This screen is already complete; no resume work is required."
+    : report.complete
+      ? "This completed collection belongs to a different boot or changed host context, so it " +
+        "cannot authorize a confirmation here. Preserve it, then start a new screen:\n\n" +
+        `${shellQuote(path.join(result.plan.identity.kitRoot, "share/prepare-results"))} ` +
+        `'--results-root' ${shellQuote(result.plan.storage.resultsRoot)} ` +
+        `'--bundle' ${shellQuote(collectionDir)} '--destination' '/path/to/persistent/destination'`
+      : resumable
       ? `To resume untouched targets on this same boot:\n\n` +
         `${shellQuote(launcher)} '--resume' ${shellQuote(collectionDir)} '--yes'`
       : "This collection belongs to a different boot or changed host context, so it cannot " +
@@ -199,6 +221,8 @@ export async function runReferenceDiscoveryCli(argv = process.argv.slice(2), dep
         options.collectionDir,
       );
       printReport(result.report, options.json, output, dependencies.renderReport);
+      if (!options.json) printConfirmationGuidance({ ...result,
+        collectionDir: options.collectionDir }, output);
       return 0;
     }
     if (options.mode === "resume") {
@@ -226,6 +250,7 @@ export async function runReferenceDiscoveryCli(argv = process.argv.slice(2), dep
         { yes: true, signal, environment: dependencies.environment ?? process.env },
       );
       printReport(result.report, false, output, dependencies.renderReport);
+      printConfirmationGuidance(result, output);
       output(`Results: ${result.collectionDir}`);
       return result.report.complete ? 0 : 1;
     }
@@ -248,6 +273,7 @@ export async function runReferenceDiscoveryCli(argv = process.argv.slice(2), dep
       environment: dependencies.environment ?? process.env,
     });
     printReport(result.report, false, output, dependencies.renderReport);
+    printConfirmationGuidance(result, output);
     output(`Results: ${result.collectionDir}`);
     return result.report.complete ? 0 : 1;
   } catch (error) {

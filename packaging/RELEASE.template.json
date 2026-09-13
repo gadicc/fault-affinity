@@ -26,7 +26,8 @@
     }
   },
   "capabilities": {
-    "referenceDiscovery": 1
+    "referenceDiscovery": 1,
+    "referenceConfirmation": 1
   },
   "runtimes": {
     "controller": {

@@ -34,6 +34,13 @@ export const REFERENCE_CONFIRMATION_PROFILE = Object.freeze({
   id: "load-aba-discovered-confirmation",
   version: 1,
   pgliteVersion: "0.5.4",
+  attemptsPerLeg: 20,
+  initialSettleMs: 15_000,
+  loadWarmupMs: 0,
+  recoveryMs: 15_000,
+  attemptTimeoutMs: 120_000,
+  termGraceMs: 1_000,
+  killGraceMs: 2_000,
 });
 
 const MAX_SYSTEM_TEXT_BYTES = 1024 * 1024;
@@ -60,6 +67,7 @@ export function validateReferenceDiscoveryReleaseDeclaration(value) {
   const discovery = value?.profiles?.referenceDiscovery;
   const confirmation = value?.profiles?.referenceConfirmation;
   if (value?.capabilities?.referenceDiscovery !== 1 ||
+      value?.capabilities?.referenceConfirmation !== 1 ||
       discovery?.id !== REFERENCE_DISCOVERY_PROFILE.id ||
       discovery?.version !== REFERENCE_DISCOVERY_PROFILE.version ||
       discovery?.protocol !== REFERENCE_DISCOVERY_PROTOCOL ||

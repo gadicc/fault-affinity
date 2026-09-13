@@ -60,6 +60,7 @@ kit_dir="$extract_dir/fault-affinity"
 "$kit_dir/runtime/controller/bin/node" --version
 "$kit_dir/runtime/reference/bin/node" --version
 "$kit_dir/bin/discover-reference" --help
+"$kit_dir/bin/confirm-reference" --help
 "$kit_dir/bin/run-reference" --help
 "$kit_dir/share/prepare-results" --help
 

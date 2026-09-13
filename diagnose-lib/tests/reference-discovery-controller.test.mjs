@@ -52,7 +52,7 @@ function sha256(value) {
 
 function discoveryReleaseDeclaration() {
   return {
-    capabilities: { referenceDiscovery: 1 },
+    capabilities: { referenceDiscovery: 1, referenceConfirmation: 1 },
     profiles: {
       referenceDiscovery: {
         id: "reference-loaded-discovery",
