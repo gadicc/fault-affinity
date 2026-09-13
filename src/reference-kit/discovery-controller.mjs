@@ -20,6 +20,7 @@ import {
 import {
   REFERENCE_DISCOVERY_MINIMUM_HEADROOM_BYTES,
   REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES,
+  REFERENCE_DISCOVERY_PROTOCOL,
   REFERENCE_DISCOVERY_PROFILE,
   buildReferenceDiscoveryPlan,
   parseReferenceDiscoveryPlan,
@@ -29,6 +30,18 @@ import {
 
 export const REFERENCE_DISCOVERY_OUTPUT_PREFIX = "reference-discovery-";
 export const REFERENCE_DISCOVERY_CONDITION_ID = "reference-guided-yes-load";
+export const REFERENCE_CONFIRMATION_PROFILE = Object.freeze({
+  id: "load-aba-discovered-confirmation",
+  version: 1,
+  pgliteVersion: "0.5.4",
+  attemptsPerLeg: 20,
+  initialSettleMs: 15_000,
+  loadWarmupMs: 0,
+  recoveryMs: 15_000,
+  attemptTimeoutMs: 120_000,
+  termGraceMs: 1_000,
+  killGraceMs: 2_000,
+});
 
 const MAX_SYSTEM_TEXT_BYTES = 1024 * 1024;
 const SAFE_OUTPUT_NAME_RE =
@@ -48,6 +61,24 @@ export class ReferenceDiscoveryControllerError extends Error {
 
 function fail(message, code) {
   throw new ReferenceDiscoveryControllerError(message, code);
+}
+
+export function validateReferenceDiscoveryReleaseDeclaration(value) {
+  const discovery = value?.profiles?.referenceDiscovery;
+  const confirmation = value?.profiles?.referenceConfirmation;
+  if (value?.capabilities?.referenceDiscovery !== 1 ||
+      value?.capabilities?.referenceConfirmation !== 1 ||
+      discovery?.id !== REFERENCE_DISCOVERY_PROFILE.id ||
+      discovery?.version !== REFERENCE_DISCOVERY_PROFILE.version ||
+      discovery?.protocol !== REFERENCE_DISCOVERY_PROTOCOL ||
+      discovery?.pgliteVersion !== "0.5.4" ||
+      confirmation?.id !== REFERENCE_CONFIRMATION_PROFILE.id ||
+      confirmation?.version !== REFERENCE_CONFIRMATION_PROFILE.version ||
+      confirmation?.pgliteVersion !== REFERENCE_CONFIRMATION_PROFILE.pgliteVersion) {
+    fail("RELEASE.json guided reference profiles or capability are invalid",
+      "REFERENCE_RELEASE_IDENTITY_MISMATCH");
+  }
+  return value;
 }
 
 function digestBytes(value) {
@@ -486,6 +517,7 @@ export function resolveReferenceDiscoveryWorkloads(layout, launchEnvironment, bi
 }
 
 export function collectReferenceDiscoveryIdentity(layout, observed, workloads, releaseFile) {
+  validateReferenceDiscoveryReleaseDeclaration(observed?.release);
   const controllerRuntime = fileIdentity(layout.controllerNode, observed.executables.controller, {
     version: true,
   });
@@ -666,13 +698,8 @@ export function planReferenceDiscovery({
   }
 }
 
-export function revalidateReferenceDiscoveryExecution(planValue, dependencies = {}) {
+export function revalidateReferenceDiscoveryContext(planValue, dependencies = {}) {
   const plan = parseReferenceDiscoveryPlan(planValue);
-  if (!plan.resources.meetsMinimum || !plan.storage.meetsMinimum ||
-      !plan.storage.supportsActiveState || plan.storage.classification !== "likely-persistent") {
-    fail("reference discovery preview did not pass live resource and storage admission",
-      "REFERENCE_DISCOVERY_ADMISSION_REFUSED");
-  }
   validateReferenceHost(dependencies.host);
   const ambient = dependencies.environment ?? process.env;
   assertSafeAmbientEnvironment(ambient);
@@ -706,34 +733,6 @@ export function revalidateReferenceDiscoveryExecution(planValue, dependencies = 
       workloads,
       releaseFileAfter,
     );
-    const resources = (dependencies.collectResources ?? collectReferenceDiscoveryResources)(
-      dependencies,
-    );
-    if (!resources.meetsMinimum) {
-      fail("reference discovery memory headroom fell below the live minimum",
-        "REFERENCE_DISCOVERY_RESOURCE_LOW");
-    }
-    const observedStorage = (dependencies.inspectStorage ?? inspectOutputStorage)(
-      plan.storage.collectionDir,
-    );
-    const currentStorage = normalizeReferenceDiscoveryStorageObservation(observedStorage);
-    if (currentStorage.available < REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES) {
-      fail("reference discovery storage fell below the live minimum",
-        "REFERENCE_DISCOVERY_STORAGE_LOW");
-    }
-    const stableStorage = {
-      mountPoint: observedStorage.mountPoint,
-      filesystemType: observedStorage.filesystemType,
-      source: observedStorage.source,
-      classification: currentStorage.classification,
-      supportsActiveState: currentStorage.supportsActiveState,
-    };
-    const plannedStorage = Object.fromEntries(Object.keys(stableStorage)
-      .map((key) => [key, plan.storage[key]]));
-    if (canonicalProtocolJson(stableStorage) !== canonicalProtocolJson(plannedStorage)) {
-      fail("reference discovery results storage changed after preview",
-        "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
-    }
     for (const [label, current, expected] of [
       ["CPU topology", topology, plan.topology],
       ["host identity", host, plan.host],
@@ -744,13 +743,102 @@ export function revalidateReferenceDiscoveryExecution(planValue, dependencies = 
           "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
       }
     }
-    return Object.freeze({ plan, layout, launchEnvironment, workloads, resources, storage: {
-      ...stableStorage,
-      availableBytes: currentStorage.available.toString(),
-    } });
+    return Object.freeze({ plan, layout, launchEnvironment, workloads });
   } finally {
     bindingKey.fill(0);
   }
+}
+
+// Evidence inspection must continue to work after a reboot so an interrupted
+// live session can still be preserved. Rebuild the frozen workload identities
+// from the plan's bound host input, while still requiring the same verified kit
+// at the same canonical path. Live resume uses the stricter context check above.
+export function revalidateReferenceDiscoveryReadContext(planValue, dependencies = {}) {
+  const plan = parseReferenceDiscoveryPlan(planValue);
+  validateReferenceHost(dependencies.host);
+  const ambient = dependencies.environment ?? process.env;
+  assertSafeAmbientEnvironment(ambient);
+  const launchEnvironment = reviewedLaunchEnvironment(ambient);
+  const layout = (dependencies.resolveLayout ?? resolveKitLayout)();
+  const collectReleaseFileIdentity = dependencies.collectReleaseFileIdentity ??
+    referenceDiscoveryReleaseFileIdentity;
+  const releaseFileBefore = collectReleaseFileIdentity(layout.releaseFile);
+  const observedIdentity = (dependencies.collectKitIdentity ?? collectReferenceKitIdentity)(layout);
+  const releaseFileAfter = collectReleaseFileIdentity(layout.releaseFile);
+  if (canonicalProtocolJson(releaseFileBefore) !== canonicalProtocolJson(releaseFileAfter)) {
+    fail("release declaration changed while identity was revalidated",
+      "REFERENCE_DISCOVERY_IDENTITY_INVALID");
+  }
+  const bindingKey = (dependencies.environmentBindingKey ??
+    referenceDiscoveryEnvironmentBindingKey)(
+    { root: layout.root, releaseFile: releaseFileAfter },
+    plan.host,
+  );
+  if (!Buffer.isBuffer(bindingKey) || bindingKey.length < 32) {
+    fail("environment binding key is invalid", "REFERENCE_DISCOVERY_IDENTITY_INVALID");
+  }
+  try {
+    const workloads = (dependencies.resolveWorkloads ?? resolveReferenceDiscoveryWorkloads)(
+      layout,
+      launchEnvironment,
+      bindingKey,
+    );
+    const identity = (dependencies.collectIdentity ?? collectReferenceDiscoveryIdentity)(
+      layout,
+      observedIdentity,
+      workloads,
+      releaseFileAfter,
+    );
+    if (canonicalProtocolJson(identity) !== canonicalProtocolJson(plan.identity)) {
+      fail("reference discovery kit/workload identity changed after collection",
+        "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
+    }
+    return Object.freeze({ plan, layout, launchEnvironment, workloads });
+  } finally {
+    bindingKey.fill(0);
+  }
+}
+
+export function revalidateReferenceDiscoveryExecution(planValue, dependencies = {}) {
+  const plan = parseReferenceDiscoveryPlan(planValue);
+  if (!plan.resources.meetsMinimum || !plan.storage.meetsMinimum ||
+      !plan.storage.supportsActiveState || plan.storage.classification !== "likely-persistent") {
+    fail("reference discovery preview did not pass live resource and storage admission",
+      "REFERENCE_DISCOVERY_ADMISSION_REFUSED");
+  }
+  const context = revalidateReferenceDiscoveryContext(plan, dependencies);
+  const resources = (dependencies.collectResources ?? collectReferenceDiscoveryResources)(
+    dependencies,
+  );
+  if (!resources.meetsMinimum) {
+    fail("reference discovery memory headroom fell below the live minimum",
+      "REFERENCE_DISCOVERY_RESOURCE_LOW");
+  }
+  const observedStorage = (dependencies.inspectStorage ?? inspectOutputStorage)(
+    plan.storage.collectionDir,
+  );
+  const currentStorage = normalizeReferenceDiscoveryStorageObservation(observedStorage);
+  if (currentStorage.available < REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES) {
+    fail("reference discovery storage fell below the live minimum",
+      "REFERENCE_DISCOVERY_STORAGE_LOW");
+  }
+  const stableStorage = {
+    mountPoint: observedStorage.mountPoint,
+    filesystemType: observedStorage.filesystemType,
+    source: observedStorage.source,
+    classification: currentStorage.classification,
+    supportsActiveState: currentStorage.supportsActiveState,
+  };
+  const plannedStorage = Object.fromEntries(Object.keys(stableStorage)
+    .map((key) => [key, plan.storage[key]]));
+  if (canonicalProtocolJson(stableStorage) !== canonicalProtocolJson(plannedStorage)) {
+    fail("reference discovery results storage changed after preview",
+      "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
+  }
+  return Object.freeze({ ...context, resources, storage: {
+    ...stableStorage,
+    availableBytes: currentStorage.available.toString(),
+  } });
 }
 
 export function revalidateReferenceDiscoveryOwnerExecution(planValue, dependencies = {}) {
@@ -781,7 +869,7 @@ export function renderReferenceDiscoveryDryRun(planValue) {
     `  target ${targetCpu} (controller ${controllerCpu})`);
   const previewBinding = referenceDiscoveryPreviewBinding(plan);
   const command = [
-    "./bin/discover-reference",
+    path.join(plan.identity.kitRoot, "bin/discover-reference"),
     "--results-root", plan.storage.resultsRoot,
     "--output-name", path.basename(plan.storage.collectionDir),
     ...(plan.selection.mode === "explicit" ? [

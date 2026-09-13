@@ -17,6 +17,7 @@ import {
   PinnedProtocolStateError,
   canonicalProtocolJson,
   createFileStateAdapter,
+  createReadOnlyFileStateAdapter,
 } from "../../diagnose-lib/pinned-protocol.mjs";
 import {
   REFERENCE_DISCOVERY_HISTORY_VERSION,
@@ -75,14 +76,18 @@ function ensureHistoryDirectory(collection) {
   const directory = path.join(collection, REFERENCE_DISCOVERY_HISTORY_DIRECTORY);
   try {
     mkdirSync(directory, { mode: 0o700 });
-    syncDirectory(collection);
   } catch (error) {
     if (error?.code !== "EEXIST") {
       fail("reference discovery history could not be created: " +
         (error?.code ?? "unknown error"));
     }
   }
-  return validatePrivateDirectory(directory, "reference discovery history directory");
+  const validated = validatePrivateDirectory(directory, "reference discovery history directory");
+  try { syncDirectory(collection); } catch {
+    fail("reference discovery history directory was not committed durably",
+      "REFERENCE_DISCOVERY_HISTORY_DIRECTORY_SYNC_FAILED");
+  }
+  return validated;
 }
 
 function requireHandle(handle) {
@@ -119,6 +124,7 @@ async function readRecords(handle, plan) {
     }
     throw error;
   }
+  requireHandle(handle);
   if (!Array.isArray(names) || names.length > 2 * REFERENCE_DISCOVERY_MAX_HISTORY_GENERATIONS ||
       names.some((name) => typeof name !== "string" || !FINAL_NAME_RE.test(name))) {
     fail("reference discovery history inventory is invalid");
@@ -139,6 +145,7 @@ async function readRecords(handle, plan) {
       }
       throw error;
     }
+    requireHandle(handle);
     if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > RECORD_MAX_BYTES) {
       fail(`reference discovery history '${name}' is empty or oversized`);
     }
@@ -152,12 +159,15 @@ async function readRecords(handle, plan) {
 }
 
 async function commitNewRecord(handle, record) {
+  const owned = requireHandle(handle);
   const name = recordFilename(record);
   const bytes = canonicalRecordLine(record);
   if (bytes.length > RECORD_MAX_BYTES) fail("reference discovery history record is oversized");
   try {
-    await handle.adapter.commit(name, bytes);
+    await owned.adapter.commit(name, bytes);
+    requireHandle(handle);
   } catch (error) {
+    requireHandle(handle);
     if (error instanceof PinnedProtocolStateError) {
       fail(`reference discovery history '${name}' was not committed durably`,
         "REFERENCE_DISCOVERY_HISTORY_COMMIT_FAILED");
@@ -179,6 +189,38 @@ export async function withReferenceDiscoveryHistoryStore({
     const directory = ensureHistoryDirectory(collection);
     assertBundleExecutionLeaseHeld(lease);
     const handle = { lease, directory, adapter: createFileStateAdapter(directory) };
+    HANDLES.add(handle);
+    try { return await operation(handle); } finally { HANDLES.delete(handle); }
+  });
+}
+
+export async function withReferenceDiscoveryHistoryReader({
+  collectionDir,
+  flockPath,
+  waitMs = 0,
+}, operation) {
+  if (typeof operation !== "function") fail("reference discovery history operation is required");
+  return withBundleExecutionLease({ bundleDir: collectionDir, flockPath, waitMs }, async (lease) => {
+    assertBundleExecutionLeaseHeld(lease);
+    const collection = validatePrivateDirectory(collectionDir, "reference discovery collection");
+    const directory = path.join(collection, REFERENCE_DISCOVERY_HISTORY_DIRECTORY);
+    let adapter;
+    try {
+      validatePrivateDirectory(directory, "reference discovery history directory");
+      adapter = createReadOnlyFileStateAdapter(directory);
+    } catch (error) {
+      let statError;
+      try { lstatSync(directory); } catch (candidate) { statError = candidate; }
+      if (statError?.code !== "ENOENT") throw error;
+      adapter = Object.freeze({
+        list: () => [],
+        read: () => { throw new PinnedProtocolStateError("history record is missing"); },
+        commit: () => { throw new PinnedProtocolStateError("history reader cannot commit"); },
+        remove: () => { throw new PinnedProtocolStateError("history reader cannot remove"); },
+      });
+    }
+    assertBundleExecutionLeaseHeld(lease);
+    const handle = { lease, directory, adapter };
     HANDLES.add(handle);
     try { return await operation(handle); } finally { HANDLES.delete(handle); }
   });

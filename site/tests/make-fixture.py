@@ -32,6 +32,25 @@ release = {
         },
     },
 }
+if variant != "legacy-valid":
+    release["profiles"] = {
+        "referenceDiscovery": {
+            "id": "reference-loaded-discovery",
+            "version": 1,
+            "protocol": "reference-loaded-discovery-v1",
+            "pgliteVersion": "0.5.4",
+        },
+        "referenceConfirmation": {
+            "id": "load-aba-discovered-confirmation",
+            "version": 1,
+            "pgliteVersion": "0.5.4",
+        },
+    }
+    release["capabilities"] = {"referenceDiscovery": 1, "referenceConfirmation": 1}
+if variant == "partial-capability":
+    release["capabilities"] = {"referenceDiscovery": 1}
+elif variant == "boolean-capability":
+    release["capabilities"] = {"referenceDiscovery": True, "referenceConfirmation": True}
 if variant == "bad-release":
     release["release"]["tag"] = "v9.9.9"
 elif variant == "runtime-mismatch":
@@ -82,6 +101,31 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
             "fault-affinity/app/src/reference-kit/controller.mjs",
             "// fixture controller\n",
         )
+    metadata_only = ("legacy-valid", "declaration-only", "partial-capability")
+    if variant not in metadata_only:
+        add_file(
+            archive,
+            "fault-affinity/app/src/reference-kit/discovery-cli.mjs",
+            "// fixture discovery controller\n",
+            0o755 if variant == "guided-source-wrong-mode" else 0o644,
+        )
+    if variant not in (*metadata_only, "partial-discovery"):
+        add_file(archive, "fault-affinity/bin/discover-reference", "#!/bin/sh\ntouch WORKLOAD_RAN\n", 0o755)
+        add_file(
+            archive,
+            "fault-affinity/app/src/reference-kit/confirmation-cli.mjs",
+            "// fixture confirmation controller\n",
+        )
+    if variant not in (*metadata_only, "partial-discovery", "partial-confirmation"):
+        if variant == "guided-launcher-wrong-type":
+            archive.addfile(info("fault-affinity/bin/confirm-reference", 0o755, tarfile.DIRTYPE))
+        else:
+            add_file(
+                archive,
+                "fault-affinity/bin/confirm-reference",
+                "#!/bin/sh\ntouch WORKLOAD_RAN\n",
+                0o644 if variant == "guided-launcher-wrong-mode" else 0o755,
+            )
     add_file(archive, "fault-affinity/bin/run-reference", "#!/bin/sh\ntouch WORKLOAD_RAN\n", 0o755)
     add_file(archive, "fault-affinity/share/prepare-results", "#!/bin/sh\nexit 0\n", 0o755)
     add_file(archive, "fault-affinity/runtime/controller/bin/node", controller_payload, 0o755)
@@ -102,6 +146,27 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
             {"path": "share/prepare-results", "mode": "0755"},
         ],
     }
+    if variant not in metadata_only:
+        mode_manifest["files"].append(
+            {
+                "path": "app/src/reference-kit/discovery-cli.mjs",
+                "mode": "0755" if variant == "guided-source-wrong-mode" else "0644",
+            }
+        )
+    if variant not in (*metadata_only, "partial-discovery"):
+        mode_manifest["files"].append(
+            {"path": "bin/discover-reference", "mode": "0755"}
+        )
+        mode_manifest["files"].append(
+            {"path": "app/src/reference-kit/confirmation-cli.mjs", "mode": "0644"}
+        )
+    if variant not in (*metadata_only, "partial-discovery", "partial-confirmation", "guided-launcher-wrong-type"):
+        mode_manifest["files"].append(
+            {
+                "path": "bin/confirm-reference",
+                "mode": "0644" if variant == "guided-launcher-wrong-mode" else "0755",
+            }
+        )
     if variant == "bad-manifest":
         mode_manifest["files"][0]["mode"] = "0666"
     add_file(archive, "fault-affinity/MODE-MANIFEST.json", json.dumps(mode_manifest))

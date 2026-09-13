@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import {
+  closeSync,
+  existsSync,
+  fstatSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -21,31 +26,56 @@ import {
   REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES,
   buildReferenceDiscoveryPlan,
   canonicalReferenceDiscoveryPlanLine,
+  referenceDiscoveryPreviewBinding,
   referenceDiscoveryPlanBinding,
 } from "../../src/reference-kit/discovery-protocol.mjs";
 import {
   collectReferenceDiscoveryTopology,
+  revalidateReferenceDiscoveryContext,
   revalidateReferenceDiscoveryExecution,
   revalidateReferenceDiscoveryOwnerExecution,
+  revalidateReferenceDiscoveryReadContext,
 } from "../../src/reference-kit/discovery-controller.mjs";
 import { runReferenceDiscoverySessionProcess } from
   "../../src/reference-kit/discovery-session-client.mjs";
 import { runReferenceDiscoverySessionOwner } from
   "../../src/reference-kit/discovery-session-owner.mjs";
 import {
+  resumeReferenceDiscoveryCampaign,
+  startReferenceDiscoveryCampaign,
+} from "../../src/reference-kit/discovery-campaign.mjs";
+import {
+  publishReferenceDiscoveryHistoryStart,
+  readReferenceDiscoveryHistory,
+  withReferenceDiscoveryHistoryReader,
+  withReferenceDiscoveryHistoryStore,
+} from "../../src/reference-kit/discovery-history-store.mjs";
+import {
   REFERENCE_DISCOVERY_PLAN_FILE,
+  REFERENCE_DISCOVERY_COORDINATION_DIRECTORY,
+  REFERENCE_DISCOVERY_COORDINATION_FILE,
   buildReferenceDiscoveryChildManifest,
   createReferenceDiscoveryCollection,
   initializeReferenceDiscoveryChild,
   readReferenceDiscoveryPlan,
+  withReferenceDiscoveryCoordinator,
 } from "../../src/reference-kit/discovery-store.mjs";
 
 const directories = [];
+const descriptors = [];
 afterEach(() => {
+  for (const descriptor of descriptors.splice(0)) closeSync(descriptor);
   for (const directory of directories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+function retainedCoordinator(directory) {
+  const fd = openSync(directory, "r");
+  descriptors.push(fd);
+  const stat = fstatSync(fd, { bigint: true });
+  return { fd, device: stat.dev.toString(), inode: stat.ino.toString() };
+}
 
 function temporaryDirectory() {
   const directory = mkdtempSync(path.join(tmpdir(), "reference-discovery-store-"));
@@ -83,7 +113,7 @@ function resolvedWorkloads(root) {
   return { measured, auxiliary };
 }
 
-function fixture(root) {
+function fixture(root, { targetCpus = [2] } = {}) {
   const workloads = resolvedWorkloads(root);
   const kitRoot = path.join(root, "kit");
   const collectionDir = path.join(root, "reference-discovery-20260913T150000Z-test");
@@ -107,26 +137,23 @@ function fixture(root) {
     taskset: { path: "/usr/bin/taskset", sha256: "6".repeat(64), bytes: "103", mode: 0o755 },
     yes: { path: "/usr/bin/yes", sha256: "7".repeat(64), bytes: "104", mode: 0o755 },
   };
+  const usableCpus = [...new Set([0, 1, ...targetCpus])].sort((left, right) => left - right);
   const topology = {
-    onlineCpus: [0, 1, 2],
-    allowedCpus: [0, 1, 2],
-    usableCpus: [0, 1, 2],
+    onlineCpus: usableCpus,
+    allowedCpus: usableCpus,
+    usableCpus,
     classes: { source: "unavailable", performanceCpus: [], efficientCpus: [] },
-    cores: [
-      { packageId: "0", coreId: "0", cpus: [0] },
-      { packageId: "0", coreId: "1", cpus: [1] },
-      { packageId: "0", coreId: "2", cpus: [2] },
-    ],
+    cores: usableCpus.map((cpu) => ({ packageId: "0", coreId: String(cpu), cpus: [cpu] })),
   };
   const plan = buildReferenceDiscoveryPlan(topology, {
-    targetCpus: [2],
+    targetCpus,
     loadCpus: [0],
     identity,
     host: {
       bootIdSha256: "8".repeat(64), machineSha256: "9".repeat(64),
       kernelRelease: "6.17.0-fixture", osReleaseSha256: "a".repeat(64),
       powerPolicySha256: null,
-      microcode: [0, 1, 2].map((cpu) => ({ cpu, value: "0x123" })),
+      microcode: usableCpus.map((cpu) => ({ cpu, value: "0x123" })),
     },
     resources: {
       memAvailableBytes: (4n * 1024n ** 3n).toString(),
@@ -183,12 +210,33 @@ test("collection publication is private, canonical, immutable, and resumable", a
   assert.equal(await createReferenceDiscoveryCollection(plan), collectionDir);
   assert.deepEqual(await readReferenceDiscoveryPlan(collectionDir), plan);
   assert.equal(REFERENCE_DISCOVERY_PLAN_FILE, "reference-discovery-plan.json");
+  assert.equal(statSync(path.join(collectionDir,
+    REFERENCE_DISCOVERY_COORDINATION_DIRECTORY)).isDirectory(), true);
+  assert.equal(statSync(path.join(collectionDir,
+    REFERENCE_DISCOVERY_COORDINATION_FILE)).isFile(), true);
   assert.equal(await createReferenceDiscoveryCollection(plan), collectionDir);
 
   const changed = structuredClone(plan);
   changed.resources.memAvailableBytes = (5n * 1024n ** 3n).toString();
   changed.resources.effectiveHeadroomBytes = changed.resources.memAvailableBytes;
   await assert.rejects(createReferenceDiscoveryCollection(changed), /different content/);
+});
+
+test("read-only collection and history inspection do not repair or create state", async () => {
+  const root = temporaryDirectory();
+  const { plan, collectionDir } = fixture(root);
+  await createReferenceDiscoveryCollection(plan);
+  const stranded = path.join(collectionDir,
+    `.${REFERENCE_DISCOVERY_PLAN_FILE}.99999999.0123456789abcdef.ready.tmp`);
+  writeFileSync(stranded, canonicalReferenceDiscoveryPlanLine(plan), { mode: 0o600 });
+
+  assert.deepEqual(await readReferenceDiscoveryPlan(collectionDir, { readOnly: true }), plan);
+  assert.equal(existsSync(stranded), true);
+  assert.equal(existsSync(path.join(collectionDir, "history")), false);
+  const history = await withReferenceDiscoveryHistoryReader({ collectionDir },
+    (store) => readReferenceDiscoveryHistory(store, plan));
+  assert.deepEqual(history.records, []);
+  assert.equal(existsSync(path.join(collectionDir, "history")), false);
 });
 
 for (const stage of ["writing", "ready", "linked"]) {
@@ -325,6 +373,20 @@ test("execution revalidation binds the previewed topology, host, and kit workloa
   }), (error) => error.code === "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
 });
 
+test("read-only context revalidation does not impose live memory or storage admission", () => {
+  const root = temporaryDirectory();
+  const { plan, measured, auxiliary } = fixture(root);
+  const dependencies = executionDependencies(plan, measured, auxiliary, root);
+  dependencies.collectResources = () => { throw new Error("must not inspect live memory"); };
+  dependencies.inspectStorage = () => { throw new Error("must not inspect live capacity"); };
+  const context = revalidateReferenceDiscoveryContext(plan, dependencies);
+  assert.equal(context.workloads.measured.digest, plan.identity.measuredWorkloadDigest);
+  dependencies.collectTopology = () => { throw new Error("must not require the original boot"); };
+  dependencies.collectHost = () => { throw new Error("must not require the original boot"); };
+  const afterReboot = revalidateReferenceDiscoveryReadContext(plan, dependencies);
+  assert.equal(afterReboot.workloads.measured.digest, plan.identity.measuredWorkloadDigest);
+});
+
 test("pinned-owner topology uses its current nested cgroup rather than the root mask", () => {
   const root = temporaryDirectory();
   const { plan, measured, auxiliary } = fixture(root);
@@ -371,13 +433,15 @@ test("session owner re-reads the bound plan and records singleton controller aff
     newGeneration: generationSource("c"),
   });
   let sessionRun = false;
+  let directoryValidations = 0;
   let record = "";
   const exitCode = await runReferenceDiscoverySessionOwner([
-    collectionDir, "1", referenceDiscoveryPlanBinding(plan).sha256,
+    collectionDir, "1", referenceDiscoveryPlanBinding(plan).sha256, "1", "2", "3", "4",
   ], {
     signalSource: signalSource(),
     readAllowedCpuList: () => "1",
     revalidate: async () => ({ workloads: { measured, auxiliary } }),
+    validateRetainedDirectories: () => { directoryValidations += 1; return true; },
     runSession: async ({ attemptOptions, validateBundle, bundleDir }) => {
       sessionRun = true;
       assert.equal(attemptOptions.signal.aborted, false);
@@ -389,6 +453,7 @@ test("session owner re-reads the bound plan and records singleton controller aff
   });
   assert.equal(exitCode, 0);
   assert.equal(sessionRun, true);
+  assert.equal(directoryValidations, 5);
   assert.deepEqual(JSON.parse(record), {
     version: 1, committed: true, reason: "committed", stage: "complete",
     errorCode: null, detail: "complete: committed",
@@ -407,9 +472,12 @@ test("session owner fails closed before revalidation when its affinity or plan b
       [referenceDiscoveryPlanBinding(plan).sha256, "0-1", "REFERENCE_DISCOVERY_CONTROLLER_INVALID"],
     ]) {
       let record = "";
-      const exitCode = await runReferenceDiscoverySessionOwner([collectionDir, "1", binding], {
+      const exitCode = await runReferenceDiscoverySessionOwner([
+        collectionDir, "1", binding, "1", "2", "3", "4",
+      ], {
         signalSource: signalSource(),
         readAllowedCpuList: () => allowed,
+        validateRetainedDirectories: () => true,
         revalidate: async () => { revalidated = true; },
         record: (value) => { record += value; },
         stderr: () => {},
@@ -448,6 +516,8 @@ test("session client launches only the bundled owner under planned singleton tas
       plan,
       sessionOrdinal: 1,
       collectionDir,
+      retainedCoordinator: retainedCoordinator(root),
+      retainedCollection: retainedCoordinator(root),
       environment: { HOME: root, LANG: "C.UTF-8" },
       ownerPath: "/fixture/discovery-session-owner.mjs",
       spawnProcess: (file, args, options) => {
@@ -461,11 +531,14 @@ test("session client launches only the bundled owner under planned singleton tas
       "-c", "1", plan.identity.controllerRuntime.path,
       "/fixture/discovery-session-owner.mjs",
     ]);
-    assert.deepEqual(invocation.args.slice(4), [
+    assert.deepEqual(invocation.args.slice(4, 7), [
       collectionDir, "1", referenceDiscoveryPlanBinding(plan).sha256,
     ]);
+    assert.equal(invocation.args.slice(7).every((value) => /^[0-9]+$/.test(value)), true);
     assert.deepEqual(invocation.options.env, { HOME: root, PATH: "/usr/bin:/bin", LANG: "C.UTF-8" });
     assert.equal(invocation.options.shell, false);
+    assert.equal(Number.isSafeInteger(invocation.options.stdio[4]), true);
+    assert.equal(Number.isSafeInteger(invocation.options.stdio[5]), true);
   });
 
 test("session client bounds owner output and terminates an overflowing child", async () => {
@@ -476,6 +549,8 @@ test("session client bounds owner output and terminates an overflowing child", a
     plan,
     sessionOrdinal: 1,
     collectionDir,
+    retainedCoordinator: retainedCoordinator(root),
+    retainedCollection: retainedCoordinator(root),
     environment: { HOME: root },
     ownerPath: "/fixture/discovery-session-owner.mjs",
     spawnProcess: () => { child = fakeChild({}, { overflow: true }); return child; },
@@ -499,9 +574,253 @@ test("session client rejects a wrong controller witness and committed nonzero ex
       plan,
       sessionOrdinal: 1,
       collectionDir,
+      retainedCoordinator: retainedCoordinator(root),
+      retainedCollection: retainedCoordinator(root),
       environment: { HOME: root },
       ownerPath: "/fixture/discovery-session-owner.mjs",
       spawnProcess: () => fakeChild(record, childOptions),
     }), pattern);
   }
+});
+
+function campaignDependencies(plan, measured, auxiliary, state = {}) {
+  let clock = 10_000;
+  return {
+    revalidateExecution: async () => {
+      if (state.requireCollectionBeforeRevalidation === true) {
+        assert.equal(statSync(plan.storage.collectionDir).isDirectory(), true);
+      }
+      return { workloads: { measured, auxiliary } };
+    },
+    revalidateContext: async () => ({ workloads: { measured, auxiliary } }),
+    initializeChild: async () => {},
+    readChild: async ({ sessionOrdinal }) => ({
+      complete: state.completeOrdinals instanceof Set
+        ? state.completeOrdinals.has(sessionOrdinal)
+        : state.complete === true,
+    }),
+    buildReport: (_plan, children, history) => Object.freeze({
+      version: 1,
+      complete: children.every((child) => child.complete),
+      historyRecords: history.length,
+    }),
+    publishReport: async ({ report }) => {
+      state.published = report;
+      return Object.freeze({ fixture: true });
+    },
+    verifyReportPublication: async () => null,
+    now: () => clock++,
+    runSession: state.runSession,
+  };
+}
+
+async function storedHistory(collectionDir, plan) {
+  return withReferenceDiscoveryHistoryStore({ collectionDir },
+    (store) => readReferenceDiscoveryHistory(store, plan));
+}
+
+test("campaign durably brackets a committed owner and publishes only after the final session",
+  async () => {
+    const root = temporaryDirectory();
+    const { plan, collectionDir, measured, auxiliary } = fixture(root);
+    const state = {
+      complete: false,
+      requireCollectionBeforeRevalidation: true,
+      runSession: async ({ retainedCoordinator, sessionOrdinal }) => {
+        const stat = fstatSync(retainedCoordinator.fd, { bigint: true });
+        assert.equal(stat.dev.toString(), retainedCoordinator.device);
+        assert.equal(sessionOrdinal, 1);
+        state.complete = true;
+        return {
+          reaped: true,
+          code: 0,
+          signal: null,
+          stderr: "",
+          record: {
+            version: 1, committed: true, reason: "committed", stage: "complete",
+            errorCode: null, detail: null, controllerCpu: 1,
+            controllerAllowedCpuList: "1",
+          },
+        };
+      },
+    };
+    const result = await startReferenceDiscoveryCampaign(plan, {
+      yes: true,
+      expectedPreviewSha256: referenceDiscoveryPreviewBinding(plan).sha256,
+      environment: { HOME: root },
+    }, campaignDependencies(plan, measured, auxiliary, state));
+    assert.equal(result.report.complete, true);
+    assert.deepEqual(result.publication, { fixture: true });
+    const history = await storedHistory(collectionDir, plan);
+    assert.equal(history.generations.length, 1);
+    assert.equal(history.generations[0].terminal.committed, true);
+    assert.equal(history.generations[0].start.coordinatorPid, process.pid);
+    assert.match(history.generations[0].start.coordinatorStartTicks, /^[0-9]+$/);
+    await assert.rejects(startReferenceDiscoveryCampaign(plan, {
+      yes: true,
+      expectedPreviewSha256: referenceDiscoveryPreviewBinding(plan).sha256,
+      environment: { HOME: root },
+    }, campaignDependencies(plan, measured, auxiliary, state)), /use explicit resume/);
+  });
+
+test("campaign leaves an open generation when owner reaping is not established", async () => {
+  const root = temporaryDirectory();
+  const { plan, collectionDir, measured, auxiliary } = fixture(root);
+  const state = {
+    runSession: async () => {
+      throw Object.assign(new Error("fixture transport uncertainty"), {
+        code: "FIXTURE_TRANSPORT_UNCERTAIN",
+      });
+    },
+  };
+  await assert.rejects(startReferenceDiscoveryCampaign(plan, {
+    yes: true,
+    expectedPreviewSha256: referenceDiscoveryPreviewBinding(plan).sha256,
+    environment: { HOME: root },
+  }, campaignDependencies(plan, measured, auxiliary, state)), /transport uncertainty/);
+  const history = await storedHistory(collectionDir, plan);
+  assert.equal(history.generations.length, 1);
+  assert.equal(history.generations[0].terminal, null);
+});
+
+test("campaign refuses coordination-directory replacement before history or owner launch",
+  async () => {
+    const root = temporaryDirectory();
+    const { plan, collectionDir, measured, auxiliary } = fixture(root);
+    let ownerRan = false;
+    const state = {
+      runSession: async () => { ownerRan = true; throw new Error("must not run"); },
+    };
+    const dependencies = campaignDependencies(plan, measured, auxiliary, state);
+    dependencies.revalidateExecution = async () => {
+      const coordination = path.join(collectionDir, REFERENCE_DISCOVERY_COORDINATION_DIRECTORY);
+      renameSync(coordination, `${coordination}-replaced`);
+      mkdirSync(coordination, { mode: 0o700 });
+      return { workloads: { measured, auxiliary } };
+    };
+    await assert.rejects(startReferenceDiscoveryCampaign(plan, {
+      yes: true,
+      expectedPreviewSha256: referenceDiscoveryPreviewBinding(plan).sha256,
+      environment: { HOME: root },
+    }, dependencies), /coordination|execution lease no longer names/);
+    assert.equal(ownerRan, false);
+    const historyDir = path.join(collectionDir, "history");
+    assert.throws(() => statSync(historyDir), (error) => error.code === "ENOENT");
+    await assert.rejects(withReferenceDiscoveryCoordinator({ collectionDir }, async () => {}),
+      /identity changed/);
+  });
+
+test("resume reconciles an open generation only after acquiring campaign and child leases",
+  async () => {
+    const root = temporaryDirectory();
+    const { plan, collectionDir, measured, auxiliary } = fixture(root);
+    await createReferenceDiscoveryCollection(plan);
+    await withReferenceDiscoveryHistoryStore({ collectionDir }, async (store) => {
+      await publishReferenceDiscoveryHistoryStart(store, plan, {
+        version: 1,
+        type: "start",
+        generation: 1,
+        sessionOrdinal: 1,
+        targetCpu: 2,
+        bootIdSha256: plan.host.bootIdSha256,
+        unixMs: 1_000,
+        coordinatorPid: 999_999,
+        coordinatorStartTicks: "1",
+      });
+    });
+    let ownerRan = false;
+    const state = {
+      runSession: async () => { ownerRan = true; throw new Error("must not run"); },
+    };
+    const result = await resumeReferenceDiscoveryCampaign(collectionDir, {
+      yes: true,
+      environment: { HOME: root },
+    }, campaignDependencies(plan, measured, auxiliary, state));
+    assert.equal(ownerRan, false);
+    assert.equal(result.report.complete, false);
+    const history = await storedHistory(collectionDir, plan);
+    assert.equal(history.generations[0].terminal.reason, "reconciled-interruption");
+    assert.equal(history.generations[0].terminal.committed, false);
+  });
+
+test("campaign records a reaped client failure as a terminal owner error", async () => {
+  const root = temporaryDirectory();
+  const { plan, collectionDir, measured, auxiliary } = fixture(root);
+  const state = {
+    runSession: async () => {
+      throw Object.assign(new Error("fixture owner output invalid"), {
+        code: "FIXTURE_OWNER_INVALID",
+        reaped: true,
+      });
+    },
+  };
+  const result = await startReferenceDiscoveryCampaign(plan, {
+    yes: true,
+    expectedPreviewSha256: referenceDiscoveryPreviewBinding(plan).sha256,
+    environment: { HOME: root },
+  }, campaignDependencies(plan, measured, auxiliary, state));
+  assert.equal(result.stoppedAfterSession, 1);
+  const history = await storedHistory(collectionDir, plan);
+  assert.equal(history.generations[0].terminal.reason, "owner-error");
+  assert.equal(history.generations[0].terminal.errorCode, "FIXTURE_OWNER_INVALID");
+});
+
+test("resume skips a failed session and continues only untouched target sessions", async () => {
+  const root = temporaryDirectory();
+  const { plan, collectionDir, measured, auxiliary } = fixture(root, {
+    targetCpus: [2, 3],
+  });
+  const calls = [];
+  const state = {
+    completeOrdinals: new Set(),
+    runSession: async ({ sessionOrdinal }) => {
+      calls.push(sessionOrdinal);
+      return {
+        reaped: true,
+        code: 2,
+        signal: null,
+        stderr: "fixture failure",
+        record: {
+          version: 1, committed: false, reason: "operational-invalid", stage: "b",
+          errorCode: "FIXTURE_OPERATIONAL_INVALID", detail: null,
+          controllerCpu: null, controllerAllowedCpuList: null,
+        },
+      };
+    },
+  };
+  const first = await startReferenceDiscoveryCampaign(plan, {
+    yes: true,
+    expectedPreviewSha256: referenceDiscoveryPreviewBinding(plan).sha256,
+    environment: { HOME: root },
+  }, campaignDependencies(plan, measured, auxiliary, state));
+  assert.equal(first.stoppedAfterSession, 1);
+  assert.equal(first.publication, null);
+
+  state.runSession = async ({ sessionOrdinal }) => {
+    calls.push(sessionOrdinal);
+    state.completeOrdinals.add(sessionOrdinal);
+    const session = plan.schedule.sessions[sessionOrdinal - 1];
+    return {
+      reaped: true,
+      code: 0,
+      signal: null,
+      stderr: "",
+      record: {
+        version: 1, committed: true, reason: "committed", stage: "complete",
+        errorCode: null, detail: null, controllerCpu: session.controllerCpu,
+        controllerAllowedCpuList: String(session.controllerCpu),
+      },
+    };
+  };
+  const resumed = await resumeReferenceDiscoveryCampaign(collectionDir, {
+    yes: true,
+    environment: { HOME: root },
+  }, campaignDependencies(plan, measured, auxiliary, state));
+  assert.deepEqual(calls, [1, 2]);
+  assert.equal(resumed.report.complete, false);
+  assert.deepEqual(resumed.publication, { fixture: true });
+  const history = await storedHistory(collectionDir, plan);
+  assert.deepEqual(history.generations.map((generation) => generation.start.sessionOrdinal), [1, 2]);
+  assert.deepEqual(history.generations.map((generation) => generation.terminal.committed),
+    [false, true]);
 });

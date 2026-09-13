@@ -374,6 +374,7 @@ with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary
 
     members = []
     canonical_names = set()
+    canonical_members = {}
     total_size = 0
     required = {
         "fault-affinity/MODE-MANIFEST.json",
@@ -413,6 +414,7 @@ with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary
                 if canonical in canonical_names:
                     fail(f"archive contains a duplicate path: {canonical!r}")
                 canonical_names.add(canonical)
+                canonical_members[canonical] = member
                 if path.parts[0] != "fault-affinity":
                     fail(f"archive has an unexpected top-level layout: {member.name!r}")
                 if len(path.parts) == 1 and not member.isdir():
@@ -433,6 +435,22 @@ with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary
             missing = required - canonical_names
             if missing:
                 fail(f"archive is missing required entries: {', '.join(sorted(missing))}")
+
+            discovery_members = {
+                "fault-affinity/app/src/reference-kit/discovery-cli.mjs": 0o644,
+                "fault-affinity/app/src/reference-kit/confirmation-cli.mjs": 0o644,
+                "fault-affinity/bin/discover-reference": 0o755,
+                "fault-affinity/bin/confirm-reference": 0o755,
+            }
+            present_discovery_members = set(discovery_members) & canonical_names
+            if present_discovery_members and present_discovery_members != set(discovery_members):
+                fail("archive contains an incomplete guided-discovery capability")
+            has_discovery = present_discovery_members == set(discovery_members)
+            if has_discovery:
+                for name, expected_mode in discovery_members.items():
+                    member = canonical_members[name]
+                    if not member.isfile() or stat.S_IMODE(member.mode) != expected_mode:
+                        fail("archive contains an unusable guided-discovery capability")
 
             staging.mkdir(mode=0o700)
             try:
@@ -487,6 +505,19 @@ with tempfile.TemporaryDirectory(prefix="fault-affinity-download-") as temporary
                 source_commit = release_info.get("sourceCommit")
                 if not isinstance(source_commit, str) or not SOURCE_COMMIT_PATTERN.fullmatch(source_commit):
                     fail("RELEASE.json source commit is invalid")
+                capabilities = release.get("capabilities")
+                if capabilities is None:
+                    declares_discovery = False
+                else:
+                    if not isinstance(capabilities, dict):
+                        fail("RELEASE.json capabilities declaration is invalid")
+                    for capability in ("referenceDiscovery", "referenceConfirmation"):
+                        version = capabilities.get(capability)
+                        if type(version) is not int or version != 1:
+                            fail("RELEASE.json guided-discovery capability is invalid")
+                    declares_discovery = True
+                if has_discovery != declares_discovery:
+                    fail("RELEASE.json guided-discovery capability does not match the archive")
                 runtime_lines = []
                 for role in ("controller", "reference"):
                     identity = runtimes.get(role)
@@ -553,70 +584,79 @@ for role, runtime_version, runtime_hash in runtime_lines:
     print(f"  {role} runtime: {runtime_version} ({runtime_hash})")
 print(f"  directory: {destination}")
 print()
-preview = shlex.quote(str(destination / "bin" / "run-reference"))
-
-
-def parse_system_cpu_set(text):
-    cpus = set()
-    for field in text.split(","):
-        match = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", field)
-        if not match:
-            raise ValueError("invalid CPU set")
-        first = int(match.group(1))
-        last = first if match.group(2) is None else int(match.group(2))
-        if last < first or last - first > 65536:
-            raise ValueError("invalid CPU range")
-        cpus.update(range(first, last + 1))
-    return cpus
-
-
-def schedulable_preview_selection():
-    try:
-        fixture_cpus = test_mode and os.environ.get("FAULT_AFFINITY_TEST_ALLOWED_CPUS")
-        if fixture_cpus:
-            allowed = parse_system_cpu_set(os.environ["FAULT_AFFINITY_TEST_ALLOWED_CPUS"])
-            online = allowed
-        else:
-            allowed = set(os.sched_getaffinity(0))
-            try:
-                online = parse_system_cpu_set(
-                    Path("/sys/devices/system/cpu/online").read_text(encoding="ascii").strip()
-                )
-            except (OSError, UnicodeError, ValueError):
-                online = allowed
-        usable = sorted(allowed & online)
-    except (AttributeError, OSError, ValueError):
-        return None
-
-    case_load = list(range(8))
-    case_controllers = [cpu for cpu in usable if cpu != 19 and cpu not in case_load]
-    if 19 in usable and all(cpu in usable for cpu in case_load) and case_controllers:
-        return "case-study", 19, case_controllers[0], case_load
-    if len(usable) < 3:
-        return None
-    return "compatibility", usable[-1], usable[-2], usable[:min(8, len(usable) - 2)]
-
-
-selection = schedulable_preview_selection()
 print("No workload was started.")
-if selection is None:
-    print(
-        "This machine exposes fewer than three schedulable CPUs, "
-        "so no A/B/A preview can be planned."
-    )
-    print(f"  {preview} --help")
+if has_discovery:
+    preview = shlex.quote(str(destination / "bin" / "discover-reference"))
+    print("Start with the guided screen's safe preview:")
+    print(f'  {preview} --results-root "$HOME" --dry-run')
+    print("It inspects the machine and proposes CPU roles; it does not create results.")
 else:
-    preview_kind, target_cpu, controller_cpu, load_cpus = selection
-    load_text = ",".join(str(cpu) for cpu in load_cpus)
-    print("For a safe preview using temporary live-session storage:")
-    print(
-        f'  {preview} --results-root "$HOME" --dry-run --controller-cpu {controller_cpu} '
-        f"--target-cpu {target_cpu} --load-cpus {load_text}"
-    )
-    if preview_kind == "case-study":
-        print("This preview uses the fixed CPU 19 / load 0-7 case-study layout.")
+    preview = shlex.quote(str(destination / "bin" / "run-reference"))
+
+    def parse_system_cpu_set(text):
+        cpus = set()
+        for field in text.split(","):
+            match = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", field)
+            if not match:
+                raise ValueError("invalid CPU set")
+            first = int(match.group(1))
+            last = first if match.group(2) is None else int(match.group(2))
+            if last < first or last - first > 65536:
+                raise ValueError("invalid CPU range")
+            cpus.update(range(first, last + 1))
+        return cpus
+
+    def schedulable_preview_selection():
+        try:
+            fixture_cpus = test_mode and os.environ.get("FAULT_AFFINITY_TEST_ALLOWED_CPUS")
+            if fixture_cpus:
+                allowed = parse_system_cpu_set(fixture_cpus)
+                online = allowed
+            else:
+                allowed = set(os.sched_getaffinity(0))
+                try:
+                    online = parse_system_cpu_set(
+                        Path("/sys/devices/system/cpu/online").read_text(
+                            encoding="ascii"
+                        ).strip()
+                    )
+                except (OSError, UnicodeError, ValueError):
+                    online = allowed
+            usable = sorted(allowed & online)
+        except (AttributeError, OSError, ValueError):
+            return None
+
+        case_load = list(range(8))
+        case_controllers = [
+            cpu for cpu in usable if cpu != 19 and cpu not in case_load
+        ]
+        if 19 in usable and all(cpu in usable for cpu in case_load) and case_controllers:
+            return "case-study", 19, case_controllers[0], case_load
+        if len(usable) < 3:
+            return None
+        return "compatibility", usable[-1], usable[-2], usable[:min(8, len(usable) - 2)]
+
+    selection = schedulable_preview_selection()
+    if selection is None:
+        print(
+            "This machine exposes fewer than three schedulable CPUs, "
+            "so no A/B/A preview can be planned."
+        )
+        print(f"  {preview} --help")
     else:
-        print("This compatibility preview is not a target recommendation.")
-        print("Do not run its --yes command until you have chosen and reviewed the CPUs to test.")
+        preview_kind, target_cpu, controller_cpu, load_cpus = selection
+        load_text = ",".join(str(cpu) for cpu in load_cpus)
+        print("This older snapshot has the fixed reference runner only.")
+        print("For a safe preview using temporary live-session storage:")
+        print(
+            f'  {preview} --results-root "$HOME" --dry-run '
+            f"--controller-cpu {controller_cpu} --target-cpu {target_cpu} "
+            f"--load-cpus {load_text}"
+        )
+        if preview_kind == "case-study":
+            print("This preview uses the fixed CPU 19 / load 0-7 case-study layout.")
+        else:
+            print("This compatibility preview is not a target recommendation.")
+            print("Do not run its --yes command until you have reviewed the CPUs.")
 print("Read README.txt and choose persistent Unix storage before any confirmed run.")
 PY

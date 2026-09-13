@@ -480,7 +480,7 @@ export function collectMachineMetadata(selection, dependencies = {}) {
   });
 }
 
-function resolvedWorkloads(layout, launchEnvironment, bindingKey) {
+function resolvedWorkloads(layout, launchEnvironment, bindingKey, profile = REFERENCE_PROFILE) {
   const common = { environment: { set: launchEnvironment }, capabilities: {} };
   const measured = resolveWorkloadSpec({
     version: 1, id: "reference-pglite-target", label: "Pinned PGlite reference target",
@@ -488,8 +488,8 @@ function resolvedWorkloads(layout, launchEnvironment, bindingKey) {
     command: { executable: layout.targetNode, args: [layout.child], cwd: layout.app },
     ...common,
     provenance: { completeness: "complete", files: [layout.child] },
-    attempt: { mode: "exit", timeoutMs: REFERENCE_PROFILE.attemptTimeoutMs,
-      termGraceMs: REFERENCE_PROFILE.termGraceMs, killGraceMs: REFERENCE_PROFILE.killGraceMs },
+    attempt: { mode: "exit", timeoutMs: profile.attemptTimeoutMs,
+      termGraceMs: profile.termGraceMs, killGraceMs: profile.killGraceMs },
     outcomes: REFERENCE_TARGET_OUTCOMES,
   }, { environment: launchEnvironment, environmentBindingKey: bindingKey });
   const auxiliary = resolveWorkloadSpec({
@@ -499,7 +499,7 @@ function resolvedWorkloads(layout, launchEnvironment, bindingKey) {
     ...common,
     provenance: { completeness: "complete", files: [] },
     attempt: { mode: "survive-window", timeoutMs: 7 * 24 * 60 * 60 * 1_000,
-      termGraceMs: REFERENCE_PROFILE.termGraceMs, killGraceMs: REFERENCE_PROFILE.killGraceMs },
+      termGraceMs: profile.termGraceMs, killGraceMs: profile.killGraceMs },
     outcomes: { targetSignals: [], mappedExits: [] },
   }, { environment: launchEnvironment, environmentBindingKey: bindingKey });
   return Object.freeze({ measured, auxiliary });
@@ -580,10 +580,15 @@ export function inspectOutputStorage(root, dependencies = {}) {
   });
 }
 
-function planValue(options, topology, identity, destination, host, machine) {
+function planValue(options, topology, identity, destination, host, machine, execution) {
+  const profile = {
+    ...execution.profile,
+    ...(Array.isArray(execution.profile.loadCpus)
+      ? { loadCpus: [...execution.profile.loadCpus] } : {}),
+  };
   return Object.freeze({
-    formatVersion: REFERENCE_FORMAT_VERSION,
-    profile: { ...REFERENCE_PROFILE, loadCpus: [...REFERENCE_PROFILE.loadCpus] },
+    formatVersion: execution.formatVersion,
+    profile,
     selection: { controllerCpu: topology.controllerCpu, targetCpu: options.targetCpu,
       loadCpus: [...options.loadCpus], attemptsPerLeg: options.attemptsPerLeg },
     schedule: [
@@ -592,11 +597,12 @@ function planValue(options, topology, identity, destination, host, machine) {
       { leg: "A2", condition: "after-recovery", attempts: options.attemptsPerLeg },
     ],
     deadlines: {
-      attemptMs: REFERENCE_PROFILE.attemptTimeoutMs,
-      termGraceMs: REFERENCE_PROFILE.termGraceMs,
-      killGraceMs: REFERENCE_PROFILE.killGraceMs,
-      loadedWindowMs: REFERENCE_PROFILE.loadWarmupMs + options.attemptsPerLeg *
-        (REFERENCE_PROFILE.attemptTimeoutMs + REFERENCE_PROFILE.termGraceMs + REFERENCE_PROFILE.killGraceMs) + 30_000,
+      attemptMs: execution.profile.attemptTimeoutMs,
+      termGraceMs: execution.profile.termGraceMs,
+      killGraceMs: execution.profile.killGraceMs,
+      loadedWindowMs: execution.profile.loadWarmupMs + options.attemptsPerLeg *
+        (execution.profile.attemptTimeoutMs + execution.profile.termGraceMs +
+          execution.profile.killGraceMs) + 30_000,
     },
     cleanupContract: {
       attempt: "identity-bound-process-group-term-then-kill-v1",
@@ -610,11 +616,12 @@ function planValue(options, topology, identity, destination, host, machine) {
     machine,
     topology,
     identity,
+    ...(execution.planExtra === undefined ? {} : execution.planExtra),
   });
 }
 
-function appendEvent(file, type, payload = {}) {
-  appendFileSync(file, `${JSON.stringify({ formatVersion: REFERENCE_FORMAT_VERSION, type,
+function appendEvent(file, type, payload = {}, formatVersion = REFERENCE_FORMAT_VERSION) {
+  appendFileSync(file, `${JSON.stringify({ formatVersion, type,
     unixMs: Date.now(), monotonicNs: process.hrtime.bigint().toString(), ...payload })}\n`, { encoding: "utf8" });
 }
 
@@ -677,11 +684,13 @@ const SUMMARY_OUTCOMES = Object.freeze([
 ]);
 
 export function renderReferenceSummary(status, plan, session, operationalError = null) {
+  const profile = plan.profile ?? REFERENCE_PROFILE;
+  const confirmation = profile.id !== REFERENCE_PROFILE.id;
   const lines = [
-    "# Fault Affinity reference run",
+    confirmation ? "# Fault Affinity selected-CPU confirmation" : "# Fault Affinity reference run",
     "",
     `- Operational status: **${status}**`,
-    `- Profile: \`${REFERENCE_PROFILE.id}\` version ${REFERENCE_PROFILE.version}`,
+    `- Profile: \`${profile.id}\` version ${profile.version}`,
     `- Controller CPU: ${plan.selection.controllerCpu}`,
     `- Target CPU: ${plan.selection.targetCpu}`,
     `- Load CPUs: ${plan.selection.loadCpus.join(", ")}`,
@@ -761,7 +770,7 @@ export function renderDryRunPlan(plan) {
 }
 
 async function ensureLiveControllerAffinity(options, topology, layout, launchEnvironment,
-  dependencies) {
+  execution, dependencies) {
   const current = (dependencies.readControllerCpus ?? allowedCpuSet)();
   if (current.length === 1 && current[0] === topology.controllerCpu) return null;
   if (dependencies.reexecController !== undefined) {
@@ -771,13 +780,36 @@ async function ensureLiveControllerAffinity(options, topology, layout, launchEnv
     fail("bundled controller runtime cannot re-exec with singleton affinity",
       "REFERENCE_CONTROLLER_AFFINITY_FAILED");
   }
+  const controllerModule = execution.controllerModule ?? fileURLToPath(import.meta.url);
+  const argumentsFor = execution.reexecArgs ?? referenceArgs;
   process.execve(layout.taskset, [layout.taskset, "-c", String(topology.controllerCpu),
-    layout.controllerNode, fileURLToPath(import.meta.url), ...referenceArgs(options, topology.controllerCpu)],
+    layout.controllerNode, controllerModule, ...argumentsFor(options, topology.controllerCpu)],
   launchEnvironment);
   fail("controller affinity re-exec unexpectedly returned", "REFERENCE_CONTROLLER_AFFINITY_FAILED");
 }
 
-export async function executeReference(options, dependencies = {}) {
+function validateExecutionProfile(execution) {
+  const profile = execution?.profile;
+  if (![1, 2].includes(execution?.formatVersion) ||
+      typeof profile?.id !== "string" || profile.id.length === 0 || profile.version !== 1 ||
+      (execution.formatVersion === 2 && profile.pgliteVersion !== "0.5.4") ||
+      !Number.isSafeInteger(profile.attemptsPerLeg) || profile.attemptsPerLeg < 1 ||
+      !["initialSettleMs", "loadWarmupMs", "recoveryMs", "attemptTimeoutMs", "termGraceMs",
+        "killGraceMs"].every((key) => Number.isSafeInteger(profile[key]) && profile[key] >= 0) ||
+      execution.planExtra !== undefined &&
+        (execution.planExtra === null || typeof execution.planExtra !== "object" ||
+          Array.isArray(execution.planExtra) ||
+          Object.keys(execution.planExtra).some((key) => ["formatVersion", "profile", "selection",
+            "schedule", "deadlines", "cleanupContract", "outputRoot", "outputLeaf", "storage",
+            "host", "machine", "topology", "identity"].includes(key)))) {
+    fail("reference execution profile is invalid", "REFERENCE_PROFILE_INVALID");
+  }
+  return execution;
+}
+
+export async function executeReferenceProfile(options, executionValue, dependencies = {}) {
+  const execution = validateExecutionProfile(executionValue);
+  const assertAuthorizationHeld = execution.assertAuthorizationHeld ?? (() => true);
   const host = validateReferenceHost(dependencies.host);
   assertSafeAmbientEnvironment(dependencies.environment ?? process.env);
   const launchEnvironment = reviewedLaunchEnvironment(dependencies.environment ?? process.env);
@@ -791,11 +823,20 @@ export async function executeReference(options, dependencies = {}) {
   const machine = (dependencies.collectMachineMetadata ?? collectMachineMetadata)({
     controllerCpu: topology.controllerCpu, targetCpu: options.targetCpu, loadCpus: options.loadCpus,
   });
-  const plan = planValue(options, topology, identity, destination, host, machine);
+  const plan = planValue(options, topology, identity, destination, host, machine, execution);
   if (!options.yes) return Object.freeze({ executed: false, plan });
+  assertAuthorizationHeld();
+  if (execution.requirePersistentStorage === true &&
+      (destination.storage.classification !== "likely-persistent" ||
+        new Set(["vfat", "exfat", "ntfs", "ntfs3", "fuseblk"])
+          .has(destination.storage.filesystemType))) {
+    fail("confirmation results require persistent Unix storage",
+      "REFERENCE_RESULTS_FILESYSTEM_UNSUPPORTED");
+  }
   const delegated = await ensureLiveControllerAffinity(options, topology, layout, launchEnvironment,
-    dependencies);
+    execution, dependencies);
   if (delegated !== null) return Object.freeze({ executed: false, delegated: true, plan, delegatedResult: delegated });
+  assertAuthorizationHeld();
 
   mkdirSync(destination.leaf, { mode: 0o700 });
   const syncDirectory = dependencies.syncDirectory ?? ((target) => fsyncPath(target, true));
@@ -809,6 +850,7 @@ export async function executeReference(options, dependencies = {}) {
   }
   const runWithLease = dependencies.withBundleExecutionLease ?? withBundleExecutionLease;
   return runWithLease({ bundleDir: destination.leaf, flockPath: layout.flock, waitMs: 0 }, async (lease) => {
+  assertAuthorizationHeld();
   const active = path.join(destination.leaf, ".reference-active");
   const events = path.join(destination.leaf, "reference.jsonl");
   const progress = path.join(destination.leaf, "progress.jsonl");
@@ -818,16 +860,19 @@ export async function executeReference(options, dependencies = {}) {
   const progressFd = openSync(progress, "wx", 0o600);
   const progressRecords = [];
   const recordProgress = (value) => {
-    const record = { formatVersion: REFERENCE_FORMAT_VERSION, ...value };
+    const record = { formatVersion: execution.formatVersion, ...value };
     durableJournalRecord(progressFd, record);
     progressRecords.push(record);
   };
-  recordProgress({ type: "progress-start", profileId: REFERENCE_PROFILE.id,
-    profileVersion: REFERENCE_PROFILE.version, attemptsPerLeg: options.attemptsPerLeg,
+  recordProgress({ type: "progress-start", profileId: execution.profile.id,
+    profileVersion: execution.profile.version, attemptsPerLeg: options.attemptsPerLeg,
     plannedAttempts: options.attemptsPerLeg * 3, plan, planBinding: canonicalBinding(plan) });
-  writeFileSync(path.join(destination.leaf, "summary.md"), "# Fault Affinity reference run\n\nRun is active.\n", { flag: "wx", mode: 0o600 });
+  const activeTitle = execution.profile.id === REFERENCE_PROFILE.id
+    ? "Fault Affinity reference run" : "Fault Affinity selected-CPU confirmation";
+  writeFileSync(path.join(destination.leaf, "summary.md"), `# ${activeTitle}\n\nRun is active.\n`,
+    { flag: "wx", mode: 0o600 });
   writeFileSync(path.join(destination.leaf, "release.json"), `${JSON.stringify(identity.release, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-  appendEvent(events, "reference-start", { plan });
+  appendEvent(events, "reference-start", { plan }, execution.formatVersion);
   for (const file of [active, events, progress, path.join(destination.leaf, "summary.md"),
     path.join(destination.leaf, "release.json")]) syncFile(file);
   syncDirectory(destination.leaf);
@@ -848,18 +893,21 @@ export async function executeReference(options, dependencies = {}) {
   let loadedTimer = null;
   const setTimer = dependencies.setTimer ?? setTimeout;
   const clearTimer = dependencies.clearTimer ?? clearTimeout;
-  const retainedDirectory = (dependencies.bundleExecutionLeaseAttemptRetention ??
-    bundleExecutionLeaseAttemptRetention)(lease);
+  const retainedDirectory = execution.retainedAuthorizationDirectory ??
+    (dependencies.bundleExecutionLeaseAttemptRetention ??
+      bundleExecutionLeaseAttemptRetention)(lease);
   try {
-    const workloads = (dependencies.resolveWorkloads ?? resolvedWorkloads)(layout, launchEnvironment, bindKey);
+    const workloads = (execution.resolveWorkloads ?? dependencies.resolveWorkloads ??
+      resolvedWorkloads)(layout,
+      launchEnvironment, bindKey, execution.profile);
     const manifest = (dependencies.buildManifest ?? buildControlledLoadSessionManifest)(workloads.measured, workloads.auxiliary, {
       generation: (dependencies.randomBytes ?? randomBytes)(16).toString("hex"),
       attemptsPerLeg: options.attemptsPerLeg,
       targetCpu: options.targetCpu,
       workerCpus: [...options.loadCpus],
       tasksetPath: layout.taskset,
-      warmupMs: REFERENCE_PROFILE.loadWarmupMs,
-      recoveryMs: REFERENCE_PROFILE.recoveryMs,
+      warmupMs: execution.profile.loadWarmupMs,
+      recoveryMs: execution.profile.recoveryMs,
     });
     recordProgress({ type: "session-manifest", manifest, manifestBinding: canonicalBinding(manifest),
       workloads: {
@@ -869,9 +917,10 @@ export async function executeReference(options, dependencies = {}) {
           digest: workloads.auxiliary.digest, descriptor: workloadDescriptor(workloads.auxiliary) },
       } });
     const initialWait = dependencies.waitInterval ?? wait;
-    if (!await initialWait(REFERENCE_PROFILE.initialSettleMs, abort.signal)) {
+    if (!await initialWait(execution.profile.initialSettleMs, abort.signal)) {
       throw Object.assign(new Error("cancelled during initial settle"), { code: "REFERENCE_EXTERNAL_CANCEL" });
     }
+    assertAuthorizationHeld();
     const startWorkerSet = dependencies.startWorkerSet ?? startControlledLoadWorkerSet;
     const baseRunAttempt = dependencies.runAttempt ?? runWorkloadAttempt;
     const makeEvidence = dependencies.buildAttemptEvidence ?? buildAttemptEvidence;
@@ -880,7 +929,14 @@ export async function executeReference(options, dependencies = {}) {
       const slot = referenceSlot(nextOrdinal, options.attemptsPerLeg);
       nextOrdinal += 1;
       try {
+        assertAuthorizationHeld();
+        if (abort.signal.aborted) {
+          throw abort.signal.reason ?? Object.assign(new Error("reference execution cancelled"), {
+            code: "REFERENCE_EXTERNAL_CANCEL",
+          });
+        }
         const result = await baseRunAttempt(resolved, attemptOptions);
+        assertAuthorizationHeld();
         const evidence = makeEvidence(resolved, result);
         recordProgress({ type: "attempt-complete", ...slot, evidence,
           evidenceBinding: canonicalBinding(evidence) });
@@ -898,13 +954,37 @@ export async function executeReference(options, dependencies = {}) {
       )), plan.deadlines.loadedWindowMs);
       let handle;
       try {
+        assertAuthorizationHeld();
+        if (abort.signal.aborted) {
+          throw abort.signal.reason ?? Object.assign(new Error("reference execution cancelled"), {
+            code: "REFERENCE_EXTERNAL_CANCEL",
+          });
+        }
         handle = await startWorkerSet(workerOptions);
+        assertAuthorizationHeld();
       } catch (error) {
         clearTimer(loadedTimer);
         loadedTimer = null;
+        if (handle !== undefined) {
+          abort.abort(error);
+          try {
+            await handle.stop("session-invalid");
+          } catch (cleanupError) {
+            if (cleanupError?.code !== undefined) throw cleanupError;
+            throw Object.assign(new Error("worker cleanup failed after authorization loss", {
+              cause: cleanupError,
+            }), { code: "REFERENCE_WORKER_CLEANUP_FAILED" });
+          }
+        }
         throw error;
       }
-      return Object.freeze({ ...handle, async stop(reason) { clearTimer(loadedTimer); loadedTimer = null; return handle.stop(reason); } });
+      return Object.freeze({ ...handle, async stop(reason) {
+        clearTimer(loadedTimer);
+        loadedTimer = null;
+        const result = await handle.stop(reason);
+        assertAuthorizationHeld();
+        return result;
+      } });
     };
     sessionResult = await (dependencies.runSession ?? runControlledLoadSession)({
       measured: workloads.measured, auxiliary: workloads.auxiliary, manifest,
@@ -914,18 +994,20 @@ export async function executeReference(options, dependencies = {}) {
       runAttempt: journaledRunAttempt,
       ...(dependencies.sessionWaitInterval === undefined ? {} : { waitInterval: dependencies.sessionWaitInterval }),
     });
+    assertAuthorizationHeld();
     status = sessionResult.committed
       ? "complete"
       : externalInterrupted ? "interrupted" : "operational-incomplete";
     validateJournalAgainstSession(progressRecords, sessionResult);
-    appendEvent(events, "reference-session", { status, session: sessionResult });
+    appendEvent(events, "reference-session", { status, session: sessionResult },
+      execution.formatVersion);
   } catch (error) {
     status = externalInterrupted ? "interrupted" : "operational-incomplete";
     operationalError = {
       code: error?.code ?? "REFERENCE_CONTROLLER_ERROR",
       message: String(error?.message ?? error).slice(0, 4096),
     };
-    appendEvent(events, "reference-operational-error", operationalError);
+    appendEvent(events, "reference-operational-error", operationalError, execution.formatVersion);
   } finally {
     if (loadedTimer !== null) clearTimer(loadedTimer);
     external?.removeEventListener("abort", onExternalAbort);
@@ -937,9 +1019,11 @@ export async function executeReference(options, dependencies = {}) {
   } finally {
     closeSync(progressFd);
   }
-  appendEvent(events, "reference-end", { status });
+  appendEvent(events, "reference-end", { status }, execution.formatVersion);
   syncFile(events);
-  writeFileSync(path.join(destination.leaf, "result-state.json"), `${JSON.stringify({ formatVersion: REFERENCE_FORMAT_VERSION, status }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  writeFileSync(path.join(destination.leaf, "result-state.json"),
+    `${JSON.stringify({ formatVersion: execution.formatVersion, status }, null, 2)}\n`,
+    { flag: "wx", mode: 0o600 });
   writeFileSync(path.join(destination.leaf, "summary.md"),
     renderReferenceSummary(status, plan, sessionResult, operationalError), { mode: 0o600 });
   syncFile(path.join(destination.leaf, "result-state.json"));
@@ -949,6 +1033,16 @@ export async function executeReference(options, dependencies = {}) {
   syncDirectory(destination.leaf);
   return Object.freeze({ executed: true, plan, status, session: sessionResult });
   });
+}
+
+export async function executeReference(options, dependencies = {}) {
+  return executeReferenceProfile(options, {
+    formatVersion: REFERENCE_FORMAT_VERSION,
+    profile: REFERENCE_PROFILE,
+    controllerModule: fileURLToPath(import.meta.url),
+    reexecArgs: referenceArgs,
+    requirePersistentStorage: false,
+  }, dependencies);
 }
 
 function usage() {

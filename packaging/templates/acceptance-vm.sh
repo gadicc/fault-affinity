@@ -59,20 +59,20 @@ kit_dir="$extract_dir/fault-affinity"
 
 "$kit_dir/runtime/controller/bin/node" --version
 "$kit_dir/runtime/reference/bin/node" --version
+"$kit_dir/bin/discover-reference" --help
+"$kit_dir/bin/confirm-reference" --help
 "$kit_dir/bin/run-reference" --help
 "$kit_dir/share/prepare-results" --help
 
 before_inventory=$(find "$results_dir" -xdev -mindepth 1 \
   -printf '%P\t%y\t%s\n' | LC_ALL=C sort | sha256sum)
-plan=$("$kit_dir/bin/run-reference" \
+plan=$("$kit_dir/bin/discover-reference" \
   --results-root "$results_dir" \
-  --target-cpu 3 \
-  --controller-cpu 2 \
+  --target-cpus 3 \
   --load-cpus 0-1 \
-  --runs 1 \
   --dry-run 2>&1)
 printf '%s\n' "$plan"
-printf '%s\n' "$plan" | grep -F "Fault Affinity reference dry run" >/dev/null
+printf '%s\n' "$plan" | grep -F "Fault Affinity guided reference screen" >/dev/null
 after_inventory=$(find "$results_dir" -xdev -mindepth 1 \
   -printf '%P\t%y\t%s\n' | LC_ALL=C sort | sha256sum)
 [ "$before_inventory" = "$after_inventory" ] ||

@@ -1,38 +1,33 @@
 # Test a Windows PC with the Ubuntu live kit
 
-This guide is mainly for Windows users who want to run the same pinned
-Node/PGlite comparison in a known Linux environment. It does not install
-Ubuntu, Node, npm, Git, or a compiler on the computer.
+This guide helps Windows users test the physical computer from a temporary Ubuntu session. You don't install Ubuntu, Node.js, npm, Git, or a compiler. The guided screen chooses relevant CPU roles, and a separate confirmation collects fresh Node.js and PGlite evidence.
 
-Already using Linux? You normally do not need a live USB. Run the harness
-directly from a repository checkout as described in the
-[repository setup instructions](../README.md#quick-start), or use the release
-kit from your existing Linux session.
+Already using Linux? Skip the live USB and run the release kit from your Linux session, or use the [repository setup](../README.md#quick-start).
 
-The validated live target is Ubuntu Desktop 26.04.1 LTS on an Intel or AMD
-64-bit computer. Use only a stable kit shown on the
-[Releases page](https://github.com/gadicc/fault-affinity/releases).
+Use Ubuntu Desktop 26.04.1 LTS on an Intel or AMD 64-bit computer. Use only a stable kit from the [Fault Affinity releases page](https://github.com/gadicc/fault-affinity/releases).
 
 ## Start here
 
-### 1. Make the Ubuntu USB on Windows
+This route uses one Ubuntu boot USB and a persistent Linux results location. The results location can be an ext4 USB drive or an existing Linux partition. A Windows-readable drive is optional for the final archive.
 
-Use an empty USB drive of at least 8 GB. Creating the boot drive erases it, so
-check the selected drive carefully and back up its files first.
+### 1. Create and boot the Ubuntu USB
 
-1. Download **Ubuntu Desktop 26.04.1 LTS for Intel or AMD 64-bit** from
-   [Ubuntu's official download page](https://ubuntu.com/download/desktop).
-2. Follow Ubuntu's
-   [Windows USB guide](https://ubuntu.com/desktop/docs/en/latest/how-to/create-a-bootable-usb-stick/#on-windows)
-   to write the ISO. Copying the ISO file onto the USB is not enough.
-3. Restart the computer and choose the USB from its boot menu. Try **F12**, or
-   check the manufacturer's instructions for its boot-menu key.
-4. Choose **Try Ubuntu**, not **Install Ubuntu**.
+Creating the boot USB erases it. Use an empty drive of at least 8 GB, and check the selected drive before writing it.
 
-### 2. Download and preview the kit
+1. Download **Ubuntu Desktop 26.04.1 LTS for Intel or AMD 64-bit** from the [Ubuntu Desktop download page](https://ubuntu.com/download/desktop).
+2. Follow the [Ubuntu guide for creating a bootable USB on Windows](https://ubuntu.com/desktop/docs/en/latest/how-to/create-a-bootable-usb-stick/#on-windows). Copying the ISO file onto the drive isn't enough.
+3. Restart the computer and select the USB from its boot menu. **F12** is common, but your manufacturer may use another key.
+4. Select **Try Ubuntu**, not **Install Ubuntu**.
 
-Connect to the internet, open **Terminal** from the application menu (or press
-**Ctrl+Alt+T**), and paste these commands one line at a time:
+### 2. Choose persistent results storage
+
+The guided screen can expose a hang or reboot. Its active files must therefore use a persistent Unix filesystem such as ext4. A live-session home directory, FAT, exFAT, and NTFS don't meet this requirement.
+
+Open Ubuntu's **Files** app and mount your ext4 drive or Linux partition. Ubuntu usually mounts removable drives at `/media/ubuntu/drive_label`. If you don't already have suitable storage, read [Prepare a spare USB drive](#prepare-a-spare-usb-drive) before continuing.
+
+### 3. Download and inspect the kit
+
+Connect to the internet. Open **Terminal** from the app menu, or press **Ctrl+Alt+T**, then paste these commands one line at a time:
 
 ```sh
 wget -qO fault-affinity-run https://gadicc.github.io/fault-affinity/run
@@ -40,232 +35,170 @@ less fault-affinity-run
 bash fault-affinity-run
 ```
 
-Use the arrow keys to inspect the downloaded bootstrap, then press **q** to
-leave `less`. The last command verifies and extracts the latest stable kit. It
-does not start a test.
+Use the arrow keys to inspect the bootstrap. Press **q** to exit `less`. The final command downloads, verifies, and extracts one stable release. It doesn't start a test. Note the release tag and extracted directory it prints.
 
-When extraction finishes, copy the **safe preview** command it prints. That
-command includes `--dry-run`: it only displays the plan and creates no result
-bundle. Do not add `--yes` yet.
+Check the command printed at the end. Continue below if it names `discover-reference`. An older release may print `run-reference` instead; use the [fixed case-study comparison](#run-the-fixed-cpu-19-case-study-comparison), or wait for a guided release.
 
-### 3. Choose where results will go
+### 4. Run the guided CPU screen
 
-Read [Save the results](#save-the-results) before starting a confirmed run. You
-can keep the active result in the temporary Ubuntu home directory. Copy the
-prepared archive to a Windows-readable USB or upload it before shutting down.
+For a guided release, the bootstrap prints a `discover-reference` preview command. Change only its `--results-root` value from `$HOME` to your mounted ext4 path, then run it with `--dry-run`.
 
-## Why a real live boot is needed
+Review the CPU roles, memory check, storage check, schedule, and result path. If every check passes, the preview prints a complete command ending in `--yes`. Copy that exact command to start the screen. Don't add `--yes` by hand because the command includes a binding to the preview you reviewed.
 
-This test observes a workload pinned to logical CPUs on the physical machine.
-A virtual machine exposes guest **virtual CPUs**. QEMU can expose the host CPU
-feature set, and libvirt can pin each vCPU thread to a chosen host CPU, but the
-guest still runs through a hypervisor with virtual topology, scheduling, and
-timing. That is useful for checking the kit, as the local QEMU acceptance test
-does, but it is not a reliable substitute for a hardware result from the same
-physical CPU. See the official [QEMU CPU overview](https://qemu.readthedocs.io/en/master/system/introduction.html#options-overview)
-and [libvirt CPU pinning documentation](https://libvirt.org/formatdomain.html#cpu-tuning).
+Save other work, connect AC power, close Firefox, and disconnect drives you don't need before starting. Never run the kit with `sudo`.
 
-Docker does not make the Windows route equivalent either. Docker Desktop runs
-Linux containers through a WSL 2, Hyper-V, or Docker VMM backend; these are
-virtualized Linux environments. `--cpuset-cpus` constrains the CPUs available
-to a container, but on Windows those are CPUs exposed through that backend,
-not a bare-metal Ubuntu test. See Docker's
-[Windows backend documentation](https://docs.docker.com/desktop/setup/install/windows-install/)
-and [`--cpuset-cpus` reference](https://docs.docker.com/reference/cli/docker/container/create/).
+### 5. Confirm the selected CPU
 
-On native Linux, containers share the host kernel and CPU affinity can map to
-host CPUs, but a container adds cgroup and runtime constraints without making
-this harness easier. Run it directly on Linux instead.
+A complete screen either reports no candidate or prints a separate `confirm-reference --dry-run` command. No candidate is still a useful result; preserve the screen and stop there.
 
-## Know what the commands run
+If the screen finds a candidate, run its preview command. The preview rechecks the same machine, boot, kit, storage, and CPU selection. Copy the exact command ending in `--yes` to collect a fresh 20-attempt A1/B/A2 confirmation.
 
-`bash fault-affinity-run` is only an installer. It:
+### 6. Prepare and save the results
 
-- resolves one exact stable GitHub Release;
-- downloads its Linux archive and checksum;
-- verifies and safely extracts it; and
-- prints a harmless `run-reference ... --dry-run` command.
+After the command exits and prints its `Results:` path, change to the extracted kit directory printed by the bootstrap. Then use `prepare-results` to create a `.tar.gz` archive and adjacent `.sha256` file:
 
-The actual workload starts only when you later run the generated command with
-`--yes`.
+```sh
+cd "/path/printed/by/bootstrap"
+./share/prepare-results \
+  --results-root "/media/ubuntu/results_drive" \
+  --bundle "/media/ubuntu/results_drive/result_directory" \
+  --destination "/media/ubuntu/share_drive"
+```
 
-Release v0.1.0 contains the fixed `load-aba-reference` profile: Node 25.2.1 and
-PGlite 0.5.4, with A1 without induced load, B under induced load, and A2 after
-recovery. Its case-study defaults are target CPU 19, load CPUs 0–7, and 20
-attempts per leg.
+Use the paths printed during your run. The destination must exist and must sit outside the result directory. It can be a FAT, exFAT, or NTFS drive that Windows can read.
 
-CPU 19 was relevant on the motivating machine; it is not a general prediction
-for another computer. If that layout is unavailable, the bootstrap prints a
-compatible dry-run example using CPUs that exist, clearly marked **not a target
-recommendation**. The kit does not yet run the repository's `diagnose` or
-`loaded-discover` workflow. A separately versioned discovery kit is the next
-step before this can be called a general start-from-scratch diagnostic.
+Prepare the screen directory first. If you also ran confirmation, repeat the command for its result directory. Copy every resulting archive and checksum before shutting down. You can also upload them with Firefox as described in [Upload with Firefox](#upload-with-firefox).
 
-## Save the results
+## Understand what the kit runs
 
-An ordinary Ubuntu live home directory can disappear at shutdown or reboot.
-Choose a result route before the confirmed run:
+The bootstrap only installs a verified release. It prints a dry-run command and never starts the workload itself.
 
-| Route | Active raw result | Survives a reboot? | Best for |
+`discover-reference` is the start-from-scratch route. On a supported hybrid CPU, it tests each detected efficiency-core target under one fixed set of performance-core load workers. Each target gets three attempts in A1 without induced load, B with verified load, and A2 after recovery. The report ranks only complete, usable rows and makes no claim that a candidate CPU is defective.
+
+`confirm-reference` accepts only the candidate from a complete screen on the same machine and boot. It collects new samples using the frozen `load-aba-discovered-confirmation` profile. Discovery samples never count as confirmation samples.
+
+Both commands use the bundled Node.js 25.2.1 target and PGlite 0.5.4. The kit also bundles a separate Node.js 24.21.0 controller. These versions are part of the test identity, so don't replace them with a system runtime.
+
+Automatic discovery version 1 requires a supported hybrid topology. If the preview says automatic selection is unavailable, don't guess CPU roles. Preserve the message and ask for guidance, or use the fixed case-study comparison described below.
+
+## Why you must boot the physical computer
+
+This test pins work to logical CPUs on the physical machine. A virtual machine exposes virtual CPUs, so its CPU numbers don't identify the same physical execution context.
+
+QEMU can expose host CPU features, pin virtual-CPU threads, and use `-cpu host`. The guest still has hypervisor scheduling, virtual topology, and different timing. QEMU is suitable for checking that the kit boots and stays dry by default, but not for a reliable physical-CPU result. See the [QEMU CPU overview](https://qemu.readthedocs.io/en/master/system/introduction.html#options-overview) and [libvirt CPU pinning documentation](https://libvirt.org/formatdomain.html#cpu-tuning).
+
+Docker Desktop on Windows uses a Windows Subsystem for Linux 2 (WSL 2), Hyper-V, or Docker virtual machine backend. `--cpuset-cpus` limits the virtual CPUs available to a container; it doesn't turn the run into a bare-metal Ubuntu test. See the [Docker Desktop Windows backend documentation](https://docs.docker.com/desktop/setup/install/windows-install/) and [`--cpuset-cpus` reference](https://docs.docker.com/reference/cli/docker/container/create/).
+
+On native Linux, containers share the host kernel and can map affinity to host CPUs. A container still adds cgroup and runtime constraints, so run this kit directly on Linux.
+
+## Choose how to save results
+
+Active evidence and shareable files have different filesystem needs:
+
+| Storage | Active screen or confirmation | Final archive | Readable on Windows |
 | --- | --- | --- | --- |
-| Windows-readable USB | Ubuntu `$HOME`, then prepare onto the mounted USB | Only after preparation | Direct transfer back to Windows |
-| ext4 USB or internal Linux partition | The mounted Linux filesystem | Yes | A machine that may hang or reboot |
-| Firefox upload | Ubuntu `$HOME`, then prepare and upload | Only after upload | No suitable second drive |
+| ext4 USB or Linux partition | Yes | Yes | Not without extra software |
+| FAT, exFAT, or NTFS drive | No | Yes | Yes |
+| Live Ubuntu `$HOME` | Preview only | Temporary copy | No after shutdown |
+| Firefox upload | Requires ext4 active storage first | Yes | Download from the service |
 
-### Transfer back to Windows with a normal USB
+### Store active results on ext4
 
-If Ubuntu's **Files** application can mount an existing FAT, exFAT, or NTFS
-drive, it can hold the final `.tar.gz` and `.sha256` files. The active raw
-result cannot live there: it needs Unix ownership, private permissions, and
-advisory locks.
+Use an ext4 USB drive or an existing mounted Linux partition for the guided screen and confirmation. This keeps the journal available if the machine reboots.
 
-Run the active test under `$HOME`, prepare its result onto the mounted drive,
-and do both before shutting down. If the machine reboots during the test, the
-unprepared raw result may be lost.
-
-### Keep raw results across a reboot with ext4
-
-An ext4-formatted second USB or an existing mounted Linux partition can hold
-the active raw result and its progress journal. This is safer when a hang or
-reboot is plausible. Do not format or repartition a drive during this guide;
-that would erase it.
-
-To see drive labels, filesystems, and mount locations:
+To list filesystems, labels, sizes, and mount paths, run:
 
 ```sh
 lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINTS
 ```
 
-Ubuntu commonly mounts removable drives below
-`/media/ubuntu/<volume-name>`. Identify a drive by its label, size, and
-filesystem rather than copying an example path literally.
+Identify a drive by its label, size, and filesystem. Don't copy an example path without checking it. Formatting or repartitioning a drive erases data; use only a spare empty drive if you follow the next section.
 
-### No second drive: upload after the test
+### Prepare a spare USB drive
 
-You can keep the active result under `$HOME`, prepare the sharing files there,
-then use Ubuntu's included Firefox to upload both files to Google Drive,
-Dropbox, Gmail, or another service. Do this only after the controller says all
-load workers have stopped, and before shutting down.
+For a Windows-only computer, a second empty USB drive is usually the clearest active-storage route. Preparing it as ext4 erases every file on that drive.
 
-An unstable machine may corrupt a file or expose credentials. Prefer a USB
-when practical, avoid an important account, use a restricted link rather than
-a public one, and verify the downloaded checksum later on a stable computer.
+1. In the Ubuntu live session, open **Disks** from the app menu.
+2. Select the spare USB by its model and capacity. Check again that you didn't select the Windows disk or Ubuntu boot USB.
+3. Format its partition as ext4 and give it a recognizable name such as `FAULT_RESULTS`.
+4. Open the new volume in **Files** to mount it.
 
-## Run the fixed reference comparison
+Ubuntu's [removable-disk formatting guide](https://help.ubuntu.com/stable/ubuntu-help/disk-format.html.en) shows the same **Disks** workflow. Use Firefox to upload the final archive, or copy it later to a Windows-readable drive.
 
-The bootstrap prints a dry-run command compatible with the CPUs visible on
-that machine. It is a preview, not a target recommendation. Use that exact
-command to inspect the plan. For example, the case-study layout is:
+### Transfer the final archive on a normal USB drive
 
-```sh
-cd fault-affinity-v0.1.0
-./bin/run-reference \
-  --results-root "$HOME" \
-  --dry-run \
-  --controller-cpu 8 \
-  --target-cpu 19 \
-  --load-cpus 0,1,2,3,4,5,6,7
-```
+If a removable drive is formatted as FAT, exFAT, or NTFS and Ubuntu's **Files** app can open it, use it as the `prepare-results --destination`. These filesystems are suitable for the final `.tar.gz` and `.sha256` pair, but not the active journal.
 
-Use the directory name printed by the bootstrap rather than assuming v0.1.0,
-and replace `$HOME` with an ext4 mount path if you chose durable raw storage.
-The dry run checks the release, runtime hashes, CPU sets, schedule, capacity,
-and output location.
+### Upload with Firefox
 
-With persistent Unix storage, the plan prints a complete command ending in
-`--yes`. Copy that command. With `$HOME`, it suppresses the command because a
-reboot can erase the result. If you accept that risk and have chosen the CPUs
-deliberately, edit the preview command only by replacing `--dry-run` with
-`--yes`. Do not confirm a compatibility preview as if it recommended a target.
+Prepare the archive into a directory outside the raw result, then open Ubuntu's included Firefox. Upload the `.tar.gz` and `.sha256` files to Google Drive, Dropbox, Gmail, or another service before shutting down.
 
-Before running it, save unrelated work, use AC power, disconnect unneeded
-storage, close Firefox and other applications, and leave the terminal open.
-The confirmed workload deliberately creates sustained work and may expose a
-hang or reboot. It does not need root; never use `sudo`.
+An unstable machine can corrupt files or expose credentials. Use removable media when practical, avoid an important account, share a restricted link, and verify the checksum again on a stable computer.
 
-A timeout, cleanup problem, reboot, or interruption is operational/incomplete
-evidence, not automatically a target fault.
+## Resume or preserve an interrupted screen
 
-## Prepare and verify the result
-
-Wait for the controller to finish and report that all load workers stopped.
-It prints the result bundle path. Create a shareable archive with:
+From the extracted kit directory, preview a stopped screen on the same Ubuntu boot with:
 
 ```sh
-./share/prepare-results \
-  --results-root "$HOME" \
-  --bundle "$HOME/reference-20260913T120000Z" \
-  --destination "/media/ubuntu/SHARE"
+./bin/discover-reference --resume "/media/ubuntu/results_drive/reference-discovery-20260913T120000Z"
 ```
 
-Replace the example timestamp and paths with those printed for your run. For
-an ext4 raw result, use that same mount as `--results-root`. The destination
-can be a different directory or a mounted Windows-readable USB. For a Firefox
-upload, a directory outside the result bundle, such as `$HOME`, can be the
-destination.
+The preview prints the matching `--yes` resume command. It runs only untouched target sessions.
 
-The preparer accepts only a finished versioned result, displays its file
-inventory and privacy warning, and creates:
+After a reboot, the old collection can't resume or authorize confirmation because the boot identity changed. Boot **Try Ubuntu** again, remount the results drive at its original path, and reinstall the same release tag with the bootstrap's `--version` option. From that extracted kit, use `prepare-results` to preserve the old collection as `incomplete-non-selection-evidence`, then start a new screen.
 
-```text
-fault-affinity-results-<UTC timestamp>.tar.gz
-fault-affinity-results-<UTC timestamp>.tar.gz.sha256
-```
+If a reboot leaves `.reference-active` inside a confirmation or fixed result, preserve the whole directory unchanged. The preparer refuses to invent a final status for it.
 
-It does not upload, delete, redact, or repair the raw result. Review the
-inventory before sharing; output can contain paths, arguments, error text, or
-other identifying content. Do not publish credentials, account names, serial
-numbers, unrelated logs, core dumps, or browser data.
+## Verify and share the archive
 
-Change to the archive destination, then verify both files before ejecting the
-drive or uploading. For the USB example:
+Change to the archive destination and run the exact checksum filename printed by `prepare-results`:
 
 ```sh
-cd "/media/ubuntu/SHARE"
-sha256sum -c fault-affinity-results-20260913T120000Z.tar.gz.sha256
+sha256sum -c fault-affinity-confirmation-complete-20260913T120000Z.tar.gz.sha256
 sync
 ```
 
-Use `cd "$HOME"` instead if that was your upload destination. Replace the
-example timestamp with the filename printed by the preparer. On a stable
-Windows computer, open PowerShell in the folder containing both files. Compare
-the same values with:
+On Windows, open PowerShell in the directory containing both files:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\fault-affinity-results-20260913T120000Z.tar.gz
-Get-Content .\fault-affinity-results-20260913T120000Z.tar.gz.sha256
+Get-FileHash -Algorithm SHA256 .\archive_name.tar.gz
+Get-Content .\archive_name.tar.gz.sha256
 ```
 
-The two 64-character values must match; letter case does not matter.
+The two 64-character values must match; letter case doesn't matter.
 
-If a reboot leaves an ext4 result bundle containing `.reference-active`, keep
-the whole directory unchanged. The preparer refuses it because it cannot safely
-invent a final status. Report the reset and preserve the raw evidence for
-manual recovery.
+Review the printed inventory before sharing. Evidence can contain paths, arguments, process output, or error text. Don't publish credentials, account names, unrelated logs, core dumps, or browser data.
 
-Results can be shared through the repository's **Reference kit result** issue
-form. GitHub issues are normally public: share a restricted link, include the
-SHA-256 in text, and keep your own unchanged copy.
+You can report a result with the repository's **Reference kit result** issue form. GitHub issues are public unless the repository says otherwise. Prefer a restricted download link, include the SHA-256 in the issue text, and keep an unchanged copy.
 
-## Offline installation
+## Run the fixed CPU 19 case-study comparison
 
-On a stable computer, download these three files onto one removable drive:
+`run-reference` preserves the original `load-aba-reference` version 1 trigger. It uses target CPU 19, load CPUs 0 through 7, and 20 attempts per leg by default. Those CPUs matched the motivating machine; they don't predict a target on another computer.
 
-1. `fault-affinity-live-linux-x64.tar.gz` from the exact stable release;
-2. its adjacent `.sha256` file; and
-3. the [`fault-affinity-run` bootstrap](https://gadicc.github.io/fault-affinity/run).
+From the extracted kit directory, use this command only when you want that exact historical comparison:
 
-In the live session, open the drive in Files, then use its real mount path in
-place of `/media/ubuntu/KIT`:
+```sh
+./bin/run-reference --results-root "$HOME" --dry-run
+```
+
+If CPU 19 isn't available, `run-reference` rejects its defaults. An older bootstrap may print a compatible command with explicit CPU overrides. That command proves only that the runner can start; it isn't a CPU recommendation. Unlike guided discovery and confirmation, the fixed runner can use live-session storage, but a reboot can erase the result.
+
+## Install the kit without internet access
+
+On a stable computer, copy these files to a removable drive:
+
+1. `fault-affinity-live-linux-x64.tar.gz` from one stable release
+2. Its adjacent `.sha256` file
+3. The [`fault-affinity-run` bootstrap](https://gadicc.github.io/fault-affinity/run)
+
+In Ubuntu, open the drive in **Files** and use its mount path:
 
 ```sh
 cd "$HOME"
-less "/media/ubuntu/KIT/fault-affinity-run"
-bash "/media/ubuntu/KIT/fault-affinity-run" \
-  --version v0.1.0 \
-  --offline-dir "/media/ubuntu/KIT"
+less "/media/ubuntu/kit_drive/fault-affinity-run"
+bash "/media/ubuntu/kit_drive/fault-affinity-run" \
+  --version v1.2.3 \
+  --offline-dir "/media/ubuntu/kit_drive"
 ```
 
-Press **q** to leave `less`. Offline mode requires the exact release tag and
-applies the same checksum and archive checks as the online path. It still does
-not start the workload.
+Press **q** to exit `less`. Replace `v1.2.3` with the exact downloaded release tag. Offline mode performs the same checksum and archive checks and doesn't start a workload.
