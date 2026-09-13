@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { expandCpuList } from "../../diagnose-lib/pinned-runner.mjs";
 import { resolveWorkloadSpec } from "../../diagnose-lib/workload-spec.mjs";
+import { canonicalProtocolJson } from "../../diagnose-lib/pinned-protocol.mjs";
 import {
   REFERENCE_PROFILE,
   REFERENCE_TARGET_OUTCOMES,
@@ -118,6 +119,21 @@ function processAllowedSpec(readSystemFile) {
   return value;
 }
 
+function effectiveCgroupCpuSpec(readSystemFile, dependencies) {
+  const resolved = (dependencies.resolveCgroupV2Paths ?? resolvedCgroupV2Paths)(readSystemFile);
+  if (resolved !== null) {
+    const text = oneLine(readSystemFile, path.join(resolved.paths[0], "cpuset.cpus.effective"),
+      "effective nested cgroup CPU list", { optional: true });
+    if (text !== null && text !== "") return text;
+  }
+  if (dependencies.requireResolvedCgroupCpuSet === true) {
+    fail("cannot resolve the owner's effective cgroup CPU set",
+      "REFERENCE_DISCOVERY_TOPOLOGY_INCOMPLETE");
+  }
+  return oneLine(readSystemFile, "/sys/fs/cgroup/cpuset.cpus.effective",
+    "effective cgroup CPU list", { optional: true });
+}
+
 function canonicalTopologyId(value, label) {
   if (!/^(0|[1-9][0-9]{0,9})$/.test(value)) {
     fail(`${label} is unavailable or noncanonical`, "REFERENCE_DISCOVERY_TOPOLOGY_INCOMPLETE");
@@ -135,8 +151,7 @@ export function collectReferenceDiscoveryTopology(dependencies = {}) {
     dependencies.processAllowedCpuSpec ?? processAllowedSpec(readSystemFile),
     "process allowed CPU list",
   );
-  const cgroupText = oneLine(readSystemFile, "/sys/fs/cgroup/cpuset.cpus.effective",
-    "effective cgroup CPU list", { optional: true });
+  const cgroupText = effectiveCgroupCpuSpec(readSystemFile, dependencies);
   const cgroupCpus = cgroupText === null ? processAllowedCpus :
     cpuList(cgroupText, "effective cgroup CPU list");
   const allowedCpus = intersection(processAllowedCpus, cgroupCpus);
@@ -406,7 +421,7 @@ function fileIdentity(filename, source, { version = false } = {}) {
   return version ? { ...result, version: source.version } : result;
 }
 
-function releaseFileIdentity(filename) {
+export function referenceDiscoveryReleaseFileIdentity(filename) {
   const canonical = realpathSync(filename);
   const bytes = readFileSync(canonical);
   const stats = statSync(canonical);
@@ -543,6 +558,24 @@ export function collectReferenceDiscoveryStorage(resultsRoot, outputName, depend
     if (error instanceof ReferenceDiscoveryControllerError || error?.code !== "ENOENT") throw error;
   }
   const observed = (dependencies.inspectStorage ?? inspectOutputStorage)(canonicalRoot);
+  const normalized = normalizeReferenceDiscoveryStorageObservation(observed);
+  const { available, classification, supportsActiveState, warning } = normalized;
+  return {
+    resultsRoot: canonicalRoot,
+    collectionDir,
+    availableBytes: available.toString(),
+    minimumRequiredBytes: REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES.toString(),
+    meetsMinimum: available >= REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES,
+    mountPoint: observed.mountPoint,
+    filesystemType: observed.filesystemType,
+    source: observed.source,
+    classification,
+    supportsActiveState,
+    warning,
+  };
+}
+
+function normalizeReferenceDiscoveryStorageObservation(observed) {
   if (typeof observed.availableBytes !== "string" ||
       !/^(0|[1-9][0-9]*)$/.test(observed.availableBytes) ||
       observed.availableBytes.length > 24) {
@@ -556,14 +589,7 @@ export function collectReferenceDiscoveryStorage(resultsRoot, outputName, depend
   const supportsActiveState = observed.filesystemType !== null &&
     !NON_UNIX_FILESYSTEMS.has(observed.filesystemType);
   return {
-    resultsRoot: canonicalRoot,
-    collectionDir,
-    availableBytes: available.toString(),
-    minimumRequiredBytes: REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES.toString(),
-    meetsMinimum: available >= REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES,
-    mountPoint: observed.mountPoint,
-    filesystemType: observed.filesystemType,
-    source: observed.source,
+    available,
     classification,
     supportsActiveState,
     warning: classification === "unknown" && observed.classification !== "unknown"
@@ -589,9 +615,11 @@ export function planReferenceDiscovery({
   const topology = (dependencies.collectTopology ?? collectReferenceDiscoveryTopology)(dependencies);
   const host = (dependencies.collectHost ?? collectReferenceDiscoveryHost)(topology, dependencies);
   const layout = (dependencies.resolveLayout ?? resolveKitLayout)();
-  const releaseFileBefore = releaseFileIdentity(layout.releaseFile);
+  const collectReleaseFileIdentity = dependencies.collectReleaseFileIdentity ??
+    referenceDiscoveryReleaseFileIdentity;
+  const releaseFileBefore = collectReleaseFileIdentity(layout.releaseFile);
   const observedIdentity = (dependencies.collectKitIdentity ?? collectReferenceKitIdentity)(layout);
-  const releaseFileAfter = releaseFileIdentity(layout.releaseFile);
+  const releaseFileAfter = collectReleaseFileIdentity(layout.releaseFile);
   if (JSON.stringify(releaseFileBefore) !== JSON.stringify(releaseFileAfter)) {
     fail("release declaration changed while identity was collected",
       "REFERENCE_DISCOVERY_IDENTITY_INVALID");
@@ -636,6 +664,105 @@ export function planReferenceDiscovery({
   } finally {
     bindingKey.fill(0);
   }
+}
+
+export function revalidateReferenceDiscoveryExecution(planValue, dependencies = {}) {
+  const plan = parseReferenceDiscoveryPlan(planValue);
+  if (!plan.resources.meetsMinimum || !plan.storage.meetsMinimum ||
+      !plan.storage.supportsActiveState || plan.storage.classification !== "likely-persistent") {
+    fail("reference discovery preview did not pass live resource and storage admission",
+      "REFERENCE_DISCOVERY_ADMISSION_REFUSED");
+  }
+  validateReferenceHost(dependencies.host);
+  const ambient = dependencies.environment ?? process.env;
+  assertSafeAmbientEnvironment(ambient);
+  const launchEnvironment = reviewedLaunchEnvironment(ambient);
+  const topology = (dependencies.collectTopology ?? collectReferenceDiscoveryTopology)(dependencies);
+  const host = (dependencies.collectHost ?? collectReferenceDiscoveryHost)(topology, dependencies);
+  const layout = (dependencies.resolveLayout ?? resolveKitLayout)();
+  const collectReleaseFileIdentity = dependencies.collectReleaseFileIdentity ??
+    referenceDiscoveryReleaseFileIdentity;
+  const releaseFileBefore = collectReleaseFileIdentity(layout.releaseFile);
+  const observedIdentity = (dependencies.collectKitIdentity ?? collectReferenceKitIdentity)(layout);
+  const releaseFileAfter = collectReleaseFileIdentity(layout.releaseFile);
+  if (canonicalProtocolJson(releaseFileBefore) !== canonicalProtocolJson(releaseFileAfter)) {
+    fail("release declaration changed while identity was revalidated",
+      "REFERENCE_DISCOVERY_IDENTITY_INVALID");
+  }
+  const bindingKey = (dependencies.environmentBindingKey ??
+    referenceDiscoveryEnvironmentBindingKey)({ root: layout.root, releaseFile: releaseFileAfter }, host);
+  if (!Buffer.isBuffer(bindingKey) || bindingKey.length < 32) {
+    fail("environment binding key is invalid", "REFERENCE_DISCOVERY_IDENTITY_INVALID");
+  }
+  try {
+    const workloads = (dependencies.resolveWorkloads ?? resolveReferenceDiscoveryWorkloads)(
+      layout,
+      launchEnvironment,
+      bindingKey,
+    );
+    const identity = (dependencies.collectIdentity ?? collectReferenceDiscoveryIdentity)(
+      layout,
+      observedIdentity,
+      workloads,
+      releaseFileAfter,
+    );
+    const resources = (dependencies.collectResources ?? collectReferenceDiscoveryResources)(
+      dependencies,
+    );
+    if (!resources.meetsMinimum) {
+      fail("reference discovery memory headroom fell below the live minimum",
+        "REFERENCE_DISCOVERY_RESOURCE_LOW");
+    }
+    const observedStorage = (dependencies.inspectStorage ?? inspectOutputStorage)(
+      plan.storage.collectionDir,
+    );
+    const currentStorage = normalizeReferenceDiscoveryStorageObservation(observedStorage);
+    if (currentStorage.available < REFERENCE_DISCOVERY_MINIMUM_RESULTS_BYTES) {
+      fail("reference discovery storage fell below the live minimum",
+        "REFERENCE_DISCOVERY_STORAGE_LOW");
+    }
+    const stableStorage = {
+      mountPoint: observedStorage.mountPoint,
+      filesystemType: observedStorage.filesystemType,
+      source: observedStorage.source,
+      classification: currentStorage.classification,
+      supportsActiveState: currentStorage.supportsActiveState,
+    };
+    const plannedStorage = Object.fromEntries(Object.keys(stableStorage)
+      .map((key) => [key, plan.storage[key]]));
+    if (canonicalProtocolJson(stableStorage) !== canonicalProtocolJson(plannedStorage)) {
+      fail("reference discovery results storage changed after preview",
+        "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
+    }
+    for (const [label, current, expected] of [
+      ["CPU topology", topology, plan.topology],
+      ["host identity", host, plan.host],
+      ["kit/workload identity", identity, plan.identity],
+    ]) {
+      if (canonicalProtocolJson(current) !== canonicalProtocolJson(expected)) {
+        fail(`reference discovery ${label} changed after preview`,
+          "REFERENCE_DISCOVERY_PREVIEW_MISMATCH");
+      }
+    }
+    return Object.freeze({ plan, layout, launchEnvironment, workloads, resources, storage: {
+      ...stableStorage,
+      availableBytes: currentStorage.available.toString(),
+    } });
+  } finally {
+    bindingKey.fill(0);
+  }
+}
+
+export function revalidateReferenceDiscoveryOwnerExecution(planValue, dependencies = {}) {
+  const plan = parseReferenceDiscoveryPlan(planValue);
+  return revalidateReferenceDiscoveryExecution(plan, {
+    ...dependencies,
+    // taskset has deliberately reduced the owner to its controller CPU. Reuse
+    // the immutable preview allowance while rereading online/cgroup/sysfs
+    // state; the owner separately witnesses its actual singleton affinity.
+    processAllowedCpuSpec: plan.topology.allowedCpus.join(","),
+    requireResolvedCgroupCpuSet: true,
+  });
 }
 
 function shellQuote(value) {

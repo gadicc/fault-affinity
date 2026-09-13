@@ -1513,6 +1513,7 @@ export async function runOneSchema3ControlledLoadSession({
   runAttempt,
   startWorkerSet,
   waitInterval,
+  validateBundle,
   attemptOptions,
 }) {
   const options = validateAttemptOptions(attemptOptions,
@@ -1523,6 +1524,8 @@ export async function runOneSchema3ControlledLoadSession({
     "schema-3 startWorkerSet must be a function");
   requireCondition(waitInterval === undefined || typeof waitInterval === "function",
     "schema-3 waitInterval must be a function");
+  requireCondition(validateBundle === undefined || typeof validateBundle === "function",
+    "schema-3 validateBundle must be a function");
   return withBundleExecutionLease({ bundleDir, flockPath, waitMs: leaseWaitMs }, async (lease) => {
     let bundle = await readBundleState(resolved, auxiliary, bundleDir);
     requireCondition([
@@ -1531,6 +1534,8 @@ export async function runOneSchema3ControlledLoadSession({
     ].includes(bundle.manifest.version) &&
       bundle.controlledLoad !== undefined,
     "schema-3 bundle manifest does not bind a controlled-load phase");
+    assertBundleExecutionLeaseHeld(lease);
+    if (validateBundle !== undefined) validateBundle(bundle);
     assertBundleExecutionLeaseHeld(lease);
     const armedState = await armSchema3ScheduledUnit(
       bundle, bundleDir, "controlled-load-aba");

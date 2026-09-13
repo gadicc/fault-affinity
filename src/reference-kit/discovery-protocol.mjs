@@ -858,7 +858,12 @@ function artifactBindingStrings(value) {
   };
 }
 
-function assertReferenceDiscoveryChildBundle(plan, session, bundle) {
+export function assertReferenceDiscoveryChildBundle(planValue, sessionOrdinal, bundle) {
+  const plan = parseReferenceDiscoveryPlan(planValue);
+  const session = plan.schedule.sessions[sessionOrdinal - 1];
+  if (session === undefined || !Number.isSafeInteger(sessionOrdinal) || sessionOrdinal < 1) {
+    fail("reference discovery child session is outside its plan");
+  }
   const controlled = bundle.controlledLoad;
   const exact = bundle.exactCpu;
   if (bundle.manifest.version !== 5 || controlled === undefined || exact === undefined ||
@@ -905,7 +910,7 @@ export async function readReferenceDiscoveryChild({
     bundleDir,
     ...(flockPath === undefined ? {} : { flockPath }),
   });
-  assertReferenceDiscoveryChildBundle(plan, session, bundle);
+  assertReferenceDiscoveryChildBundle(plan, ordinal, bundle);
   const complete = bundle.controlledLoad.progress.complete;
   if (complete !== (bundle.controlledLoad.envelope !== null)) {
     fail(`reference discovery child for CPU ${session.targetCpu} has inconsistent completion`);
