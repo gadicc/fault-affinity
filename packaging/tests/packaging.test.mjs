@@ -16,6 +16,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
+import releaseConfig from "../../release.config.mjs";
 import {
   sha256File,
   treeDigest,
@@ -525,6 +526,36 @@ test("release workflow passes expression values through env instead of shell int
     assert.doesNotMatch(program, /\$\{\{/,
       "workflow expressions must cross the expression/shell boundary through env");
   }
+});
+
+test("release feedback is enabled only for successful publication", () => {
+  const githubPlugin = releaseConfig.plugins.find((plugin) =>
+    Array.isArray(plugin) && plugin[0] === "@semantic-release/github");
+  assert.ok(githubPlugin, "expected configured GitHub release plugin");
+  const options = githubPlugin[1];
+  assert.equal(options.successComment, undefined);
+  assert.equal(options.successCommentCondition, undefined);
+  assert.deepEqual(options.releasedLabels, ["released"]);
+  assert.equal(options.failComment, undefined);
+  assert.equal(options.failTitle, undefined);
+  assert.equal(options.failCommentCondition, false);
+
+  const workflow = readFileSync(path.join(repositoryRoot,
+    ".github/workflows/release.yml"), "utf8");
+  const publishStart = workflow.indexOf("\n  publish:\n");
+  const publishEnd = workflow.indexOf("\n  recovery-readiness:\n", publishStart);
+  assert.ok(publishStart >= 0 && publishEnd > publishStart, "expected bounded publish job");
+  const publish = workflow.slice(publishStart, publishEnd);
+  assert.match(publish, /^      issues: write$/m);
+  assert.match(publish, /^      pull-requests: write$/m);
+  assert.match(publish, /gh api "repos\/\$GITHUB_REPOSITORY\/labels\/released" --silent/);
+  assert.ok(
+    publish.indexOf("Verify release-feedback label") <
+      publish.indexOf("Compute release plan with publish-capable token"),
+    "expected release-feedback label preflight before release planning",
+  );
+  assert.equal(workflow.match(/^      issues: write$/gm)?.length, 1);
+  assert.equal(workflow.match(/^      pull-requests: write$/gm)?.length, 1);
 });
 
 test("dev snapshots upload a finalized non-publishing acceptance candidate", () => {
