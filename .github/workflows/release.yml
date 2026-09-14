@@ -119,6 +119,8 @@ jobs:
     needs: [stage-linux-x64, release-readiness]
     permissions:
       contents: write
+      issues: write
+      pull-requests: write
       id-token: write
       attestations: write
     runs-on: ubuntu-24.04
@@ -137,6 +139,11 @@ jobs:
         with:
           name: linux-x64-stage-${{ github.sha }}
           path: dist/stage
+
+      - name: Verify release-feedback label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api "repos/$GITHUB_REPOSITORY/labels/released" --silent
 
       - name: Compute release plan with publish-capable token
         id: plan
