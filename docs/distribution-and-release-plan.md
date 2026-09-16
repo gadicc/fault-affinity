@@ -361,17 +361,20 @@ branch:
    not squash the promotion, because semantic-release must see the individual
    Conventional Commits introduced from `dev`.
 3. A releasable push to `main` builds and publishes one immutable release.
-4. A hotfix branches from `main`, merges to `main`, releases, and is then
+4. The resulting `main` promotion history is merged back into `dev` before
+   further integration work.
+5. A hotfix branches from `main`, merges to `main`, releases, and is then
    merged back into `dev` immediately.
 
-Keep `main` as the GitHub default so casual clones receive stable code. Add a
-required pull-request check that rejects ordinary `main` pull requests unless
-their head repository is this repository and their head branch is `dev`, or
-unless they match an explicitly allowed hotfix policy. Protect both branches,
-require safe CI, disallow force pushes, and serialize main releases. Main
-cannot require linear history while promotion merge commits are required.
-Protect version tags and enable GitHub immutable releases before unattended
-publication.
+Keep `dev` as the GitHub default so casual clones and new contribution flows
+start from the actively maintained integration branch. Keep `main` as the
+stable release branch. Add a required pull-request check that rejects ordinary
+`main` pull requests unless their head repository is this repository and their
+head branch is `dev`, or unless they match an explicitly allowed hotfix policy.
+Protect both branches, require safe CI, disallow force pushes, and serialize
+main releases. Main cannot require linear history while promotion merge commits
+are required. Protect version tags and enable GitHub immutable releases before
+unattended publication.
 
 Configure pinned semantic-release and plugin versions with
 `branches: ["main"]` and an explicit plugin list:
