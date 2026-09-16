@@ -10,14 +10,16 @@ must not be substituted with the host runtime when collecting reference data.
 
 ## Use the integration and release branches
 
-`dev` is the integration branch. Feature pull requests target `dev`; safe CI
-must pass there before promotion. `main` remains the stable/default branch and
-accepts either an in-repository `dev` promotion or an explicitly named
-`hotfix/*` pull request.
+`dev` is the GitHub default and integration branch. Feature pull requests
+target `dev`; safe CI must pass there before promotion. `main` remains the
+stable release branch and accepts either an in-repository `dev` promotion or
+an explicitly named `hotfix/*` pull request.
 
 Merge `dev` into `main` with a merge commit. Do not squash a promotion: the
 release analyzer needs the individual Conventional Commits that entered
-`dev`. Merge a released hotfix back into `dev` immediately.
+`dev`. After each promotion, synchronize the resulting `main` merge commit
+back into `dev` before new development. Merge a released hotfix back into
+`dev` immediately.
 
 The private package version stays at `0.0.0-development`. Protected `vX.Y.Z`
 tags and immutable GitHub releases are the public version authority. The reviewed
